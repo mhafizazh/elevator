@@ -1,6 +1,8 @@
-REM ...existing code...
 @echo off
 setlocal
+
+set "DEBUG_MODE=0"
+if /I "%~1"=="--debug" set "DEBUG_MODE=1"
 
 if "%PLAYDATE_SDK_PATH%"=="" (
   echo PLAYDATE_SDK_PATH is not set.
@@ -22,11 +24,23 @@ if not exist "%SIM%" (
 )
 
 set "BUILD_DIR=build"
+set "TMP_SOURCE=%BUILD_DIR%\tmp_source"
+set "PDX_DIR=%BUILD_DIR%\game.pdx"
+
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
-"%PDC%" "source" "%BUILD_DIR%\game.pdx"
+if exist "%TMP_SOURCE%" rmdir /s /q "%TMP_SOURCE%"
+xcopy "source" "%TMP_SOURCE%\" /e /i /q >nul
+
+if "%DEBUG_MODE%"=="1" (
+  > "%TMP_SOURCE%\core\build_flags.lua" echo DEBUG_MODE = true
+) else (
+  > "%TMP_SOURCE%\core\build_flags.lua" echo DEBUG_MODE = false
+)
+
+"%PDC%" "%TMP_SOURCE%" "%PDX_DIR%"
 if errorlevel 1 exit /b 1
 
-"%SIM%" "%BUILD_DIR%\game.pdx"
+"%SIM%" "%PDX_DIR%"
 
 endlocal
