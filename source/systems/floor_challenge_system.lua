@@ -58,6 +58,10 @@ local function joinItems(equippedItemIds)
 end
 
 function FloorChallengeSystem:printDebugLog(lines)
+    if not DEBUG_MODE then
+        return
+    end
+
     for _, line in ipairs(lines) do
         print(line)
     end

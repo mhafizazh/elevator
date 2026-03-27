@@ -192,10 +192,14 @@ function Game:triggerGameOver()
 	self.screenState = "game_over"
 	self.pendingEquippedItemIds = {}
 	self.lastRunSummary = "Game Over"
-	self.lastChallengeDebugLines = {
-		"All family members are dead",
-		"Run ended on floor " .. tostring(self.currentFloorIndex),
-	}
+	if DEBUG_MODE then
+		self.lastChallengeDebugLines = {
+			"All family members are dead",
+			"Run ended on floor " .. tostring(self.currentFloorIndex),
+		}
+	else
+		self.lastChallengeDebugLines = {}
+	end
 end
 
 function Game:restartGame()
@@ -246,14 +250,18 @@ function Game:resolveCurrentFloorEncounter()
 
 	self.pendingEquippedItemIds = {}
 	self.resolvedFloors[self.currentFloorIndex] = true
-	self.lastChallengeDebugLines = {
-		"Floor " .. tostring(self.currentFloorIndex) .. " (" .. floorType .. ")",
-		"Character: " .. selectedCharacter.name,
-		"Items: " .. joinItemNames(equippedItems),
-		"Chance: " .. tostring(result.chance),
-		"Roll: " .. tostring(result.roll),
-		result.survived and "Result: SURVIVED" or "Result: DIED",
-	}
+	if DEBUG_MODE then
+		self.lastChallengeDebugLines = {
+			"Floor " .. tostring(self.currentFloorIndex) .. " (" .. floorType .. ")",
+			"Character: " .. selectedCharacter.name,
+			"Items: " .. joinItemNames(equippedItems),
+			"Chance: " .. tostring(result.chance),
+			"Roll: " .. tostring(result.roll),
+			result.survived and "Result: SURVIVED" or "Result: DIED",
+		}
+	else
+		self.lastChallengeDebugLines = {}
+	end
 
 	local cutsceneLines = {
 		selectedCharacter.name .. " vs " .. tostring(floorType),
@@ -386,12 +394,16 @@ function Game:moveToSelectedFloor()
 
 	if self.currentFloorIndex == 0 then
 		self.currentFloorIndex = floorIndex
-		self.lastChallengeDebugLines = {
-			"Floor 0",
-			"Safe staging floor",
-			"No event triggered",
-			"Arrived at floor " .. tostring(self.currentFloorIndex),
-		}
+		if DEBUG_MODE then
+			self.lastChallengeDebugLines = {
+				"Floor 0",
+				"Safe staging floor",
+				"No event triggered",
+				"Arrived at floor " .. tostring(self.currentFloorIndex),
+			}
+		else
+			self.lastChallengeDebugLines = {}
+		end
 		self.lastRunSummary = "Arrived at floor " .. tostring(self.currentFloorIndex)
 		self.selectedDestinationFloor = clamp(self.currentFloorIndex + 1, 1, #self.gameData.floors)
 		self.screenState = "character_select"
@@ -564,15 +576,18 @@ function Game:drawFloorEquipUi()
 		180,
 		footerLines
 	)
-
+	if DEBUG_MODE then
 	local selectedCharacter = self:getSelectedCharacter()
-	if selectedCharacter then
-		local floorType = getFloorType(self.gameData, self.currentFloorIndex)
-		local preview = self.floorChallengeSystem:getFloorPreview(floorType, selectedCharacter, self.pendingEquippedItemIds)
-		gfx.drawText("Character: " .. selectedCharacter.name, 20, 172)
-		gfx.drawText("Floor: " .. tostring(floorType), 20, 188)
-		gfx.drawText("Chance: " .. tostring(preview.chance) .. "%", 20, 204)
-		gfx.drawText("Items: " .. joinItemNames(self.pendingEquippedItemIds), 20, 220)
+		if selectedCharacter then
+			local floorType = getFloorType(self.gameData, self.currentFloorIndex)
+			local preview = self.floorChallengeSystem:getFloorPreview(floorType, selectedCharacter, self.pendingEquippedItemIds)
+			gfx.drawText("Character: " .. selectedCharacter.name, 20, 172)
+			gfx.drawText("Floor: " .. tostring(floorType), 20, 188)
+			gfx.drawText("Chance: " .. tostring(preview.chance) .. "%", 20, 204)
+			gfx.drawText("Items: " .. joinItemNames(self.pendingEquippedItemIds), 20, 220)
+		end
+	else
+		self.lastChallengeDebugLines = {}
 	end
 end
 
@@ -667,7 +682,9 @@ function Game:drawCharacterSelectionUi()
 	gfx.drawText("A = choose items", startX, startY + panelHeight + 80)
 	gfx.drawText("B = close door", startX, startY + panelHeight + 96)
 	gfx.drawText("After item confirm: character vs floor", startX, startY + panelHeight + 112)
-	self:drawFloorValueDebugPanel()
+	if DEBUG_MODE then
+		self:drawFloorValueDebugPanel()
+	end
 end
 
 function Game:drawGameOverUi()
@@ -681,10 +698,12 @@ function Game:drawGameOverUi()
 	drawCenteredText("Run ended on floor " .. tostring(self.currentFloorIndex), 200, 112)
 	drawCenteredText("No survivors remain", 200, 136)
 
-	local y = 168
-	for _, line in ipairs(self.lastChallengeDebugLines) do
-		drawCenteredText(line, 200, y)
-		y = y + 16
+	if DEBUG_MODE then
+		local y = 168
+		for _, line in ipairs(self.lastChallengeDebugLines) do
+			drawCenteredText(line, 200, y)
+			y = y + 16
+		end
 	end
 
 	drawCenteredText("Press A or B to restart", 200, 186)

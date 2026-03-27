@@ -1,4 +1,5 @@
 import "CoreLibs/graphics"
+import "core/build_flags"
 import "core/game"
 
 local pd = playdate
