@@ -11,7 +11,7 @@ local gfx = pd.graphics
 Game = {}
 Game.__index = Game
 
-local floorTypes = { "safe", "zombie", "criminal", "trap", "loot", "radiation" }
+local floorTypes = { "safe", "zombie", "criminal", "trap", "loot", "radiation"}
 local STARTING_ITEM_LIMIT = 3
 local FLOOR_EQUIP_LIMIT = 2
 local RESULT_CUTSCENE_FRAMES = 90
@@ -129,12 +129,26 @@ function Game.new()
 	local self = setmetatable({}, Game)
 	local loadedImages = Images.load()
 
+	self.hasZombieInfection = false
+	self.hasCultKey = false
+
+	self.hasExitKey = false
 	self.images = loadedImages
 	self.crankSystem = CrankSystem.new(360, 0)
 	self.numberX = 200
 	self.numberY = 50
 	self.floorChallengeSystem = FloorChallengeSystem.new()
 	self.gameData = { floors = buildFloorRun() }
+	-- Randomly pick one floor >= 20 to contain the cult key
+	local cultKeyFloorOptions = {}
+	for floorNum = 20, #self.gameData.floors - 1 do  -- exclude "exit" floor
+		cultKeyFloorOptions[#cultKeyFloorOptions + 1] = floorNum
+	end
+	if #cultKeyFloorOptions > 0 then
+		self.cultKeyFloorIndex = cultKeyFloorOptions[math.random(1, #cultKeyFloorOptions)]
+	else
+		self.cultKeyFloorIndex = -1  -- no valid floor (won't find key)
+	end
 	self.currentFloorIndex = 0
 	self.lastRunSummary = ""
 	self.lastChallengeDebugLines = {}
@@ -272,7 +286,13 @@ function Game:resolveCurrentFloorEncounter()
 	}
 
 	if result.survived then
-		self.lastRunSummary = selectedCharacter.name .. " survived floor " .. tostring(self.currentFloorIndex)
+		-- Check if this floor has the cult key
+		if self.currentFloorIndex == self.cultKeyFloorIndex then
+			self.ownedItemIds[#self.ownedItemIds + 1] = "cult_key"
+			self.lastRunSummary = "Found: Access Card to lower levels!"
+		else
+			self.lastRunSummary = selectedCharacter.name .. " survived floor " .. tostring(self.currentFloorIndex)
+		end
 		self.selectedDestinationFloor = clamp(self.currentFloorIndex + 1, 0, #self.gameData.floors)
 		self:startResultCutscene(cutsceneLines)
 	else
@@ -731,6 +751,23 @@ function Game:drawResultCutsceneUi()
 	end
 end
 
+-- function Game:drawFloorIndicator()
+--     local boxWidth = 140
+--     local boxHeight = 36
+--     local boxX = 200 - (boxWidth / 2)  -- Center horizontally
+--     local boxY = 0
+
+--     -- Draw white rectangle with border
+--     gfx.setColor(gfx.kColorWhite)
+--     gfx.fillRect(boxX, boxY, boxWidth, boxHeight)
+--     gfx.setColor(gfx.kColorBlack)
+--     gfx.drawRect(boxX, boxY, boxWidth, boxHeight)
+
+--     -- Draw floor text centered
+--     local floorText = "Floor: " .. tostring(self.currentFloorIndex) .. "/" .. tostring(#self.gameData.floors)
+--     drawCenteredText(floorText, 200, boxY)
+-- end
+
 function Game:update()
 	self.crankSystem:update(pd.getCrankChange())
 	self:updateCrankFloorSelection()
@@ -776,11 +813,28 @@ function Game:draw()
 		backgroundToDraw:draw(0, 0)
 	end
 
-	gfx.drawText(tostring(self.crankSystem:getValue()), self.numberX, self.numberY)
+	-- Draw white rectangle background
+	local boxWidth = 50
+	local boxHeight = 16
+	local boxX = self.numberX - (boxWidth / 2)
+	local boxY = 40
+
+	gfx.setColor(gfx.kColorWhite)
+	gfx.fillRect(boxX, boxY, boxWidth, boxHeight)
+	gfx.setColor(gfx.kColorBlack)
+	gfx.drawRect(boxX, boxY, boxWidth, boxHeight)
+
+	-- Draw text centered in the box
+	gfx.setColor(gfx.kColorBlack)
+	drawCenteredText(tostring(self.crankSystem:getValue()), self.numberX, 40)
+
+	local text = "Rotate crank 360 deg = move 1 floor"
+
 
 	if self.screenState == "starting_loadout" then
 		self:drawStartingLoadoutUi()
 	elseif self.screenState == "closed_floor" then
+		-- self:drawFloorIndicator()
 		-- drawCenteredText("Floor " .. tostring(self.currentFloorIndex), 200, 32)
 		-- drawCenteredText("Doors closed", 200, 48)
 		-- drawCenteredText("Rotate crank 360 deg = move 1 floor", 200, 64)
