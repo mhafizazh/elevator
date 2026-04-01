@@ -2,6 +2,7 @@ import "CoreLibs/graphics"
 import "assets/images"
 import "systems/crank_system"
 import "systems/floor_challenge_system"
+import "systems/floor_generator"
 import "core/data/characters"
 import "core/data/items"
 
@@ -11,23 +12,10 @@ local gfx = pd.graphics
 Game = {}
 Game.__index = Game
 
-local floorTypes = { "safe", "zombie", "criminal", "trap", "loot", "radiation"}
 local STARTING_ITEM_LIMIT = 3
 local FLOOR_EQUIP_LIMIT = 2
 local RESULT_CUTSCENE_FRAMES = 90
 local RESULT_CUTSCENE_HOLD_FRAMES = 35
-
-local function buildFloorRun()
-	local floorCount = math.random(20, 30)
-	local floors = {}
-
-	for floorIndex = 1, floorCount - 1 do
-		floors[floorIndex] = floorTypes[math.random(1, #floorTypes)]
-	end
-	floors[floorCount] = "exit"
-
-	return floors
-end
 
 local function cloneCharacterState(character)
 	return {
@@ -108,12 +96,7 @@ local function drawCenteredText(text, centerX, y)
 	gfx.drawText(text, math.floor(centerX - (textWidth / 2)), y)
 end
 
-local function getFloorType(gameData, floorIndex)
-	if floorIndex == 0 then
-		return "safe"
-	end
-	return gameData.floors[floorIndex]
-end
+
 
 local function clamp(value, minValue, maxValue)
 	if value < minValue then
@@ -131,24 +114,15 @@ function Game.new()
 
 	self.hasZombieInfection = false
 	self.hasCultKey = false
-
 	self.hasExitKey = false
 	self.images = loadedImages
 	self.crankSystem = CrankSystem.new(360, 0)
 	self.numberX = 200
 	self.numberY = 50
 	self.floorChallengeSystem = FloorChallengeSystem.new()
-	self.gameData = { floors = buildFloorRun() }
-	-- Randomly pick one floor >= 20 to contain the cult key
-	local cultKeyFloorOptions = {}
-	for floorNum = 20, #self.gameData.floors - 1 do  -- exclude "exit" floor
-		cultKeyFloorOptions[#cultKeyFloorOptions + 1] = floorNum
-	end
-	if #cultKeyFloorOptions > 0 then
-		self.cultKeyFloorIndex = cultKeyFloorOptions[math.random(1, #cultKeyFloorOptions)]
-	else
-		self.cultKeyFloorIndex = -1  -- no valid floor (won't find key)
-	end
+	self.floorGenerator = FloorGenerator.new()
+	local generatedFloors, generatedLoot, exitKeyFloor = self.floorGenerator:generate()
+	self.gameData = { floors = generatedFloors, lootByFloor = generatedLoot, exitKeyFloor = exitKeyFloor }
 	self.currentFloorIndex = 0
 	self.lastRunSummary = ""
 	self.lastChallengeDebugLines = {}
@@ -165,6 +139,9 @@ function Game.new()
 	self.cutsceneTimer = 0
 	self.cutsceneHoldTimer = 0
 	self.cutsceneLines = {}
+	self.currentLootItems = {}
+	self.selectedLootItemIds = {}
+	self.lootSelectionIndex = 1
 
 	self.characters = {}
 	self.characterOptions = {}
@@ -253,8 +230,22 @@ function Game:resolveCurrentFloorEncounter()
 		return
 	end
 
-	local floorType = getFloorType(self.gameData, self.currentFloorIndex)
+	local floorType = self.floorGenerator:getFloorType(self.gameData, self.currentFloorIndex)
 	local equippedItems = cloneList(self.pendingEquippedItemIds)
+
+	if floorType == "exit" then
+		self.pendingEquippedItemIds = {}
+		self.resolvedFloors[self.currentFloorIndex] = true
+		if self.hasExitKey then
+			self.screenState = "victory"
+			self.lastRunSummary = selectedCharacter.name .. " escaped!"
+		else
+			self.screenState = "exit_locked"
+			self.lastRunSummary = "Exit is locked! Find the key."
+		end
+		return
+	end
+
 	local result = self.floorChallengeSystem:enterFloor(
 		self.currentFloorIndex,
 		floorType,
@@ -286,10 +277,27 @@ function Game:resolveCurrentFloorEncounter()
 	}
 
 	if result.survived then
-		-- Check if this floor has the cult key
-		if self.currentFloorIndex == self.cultKeyFloorIndex then
-			self.ownedItemIds[#self.ownedItemIds + 1] = "cult_key"
-			self.lastRunSummary = "Found: Access Card to lower levels!"
+		if self.currentFloorIndex == self.gameData.exitKeyFloor then
+			self.hasExitKey = true
+			self.lastRunSummary = "Found: Exit Key!"
+			cutsceneLines[#cutsceneLines + 1] = "Found: Exit Key!"
+		elseif floorType == "loot" then
+			local lootItems = self.gameData.lootByFloor[self.currentFloorIndex]
+			if lootItems and #lootItems > 0 then
+				self.currentLootItems = lootItems
+				self.selectedLootItemIds = {}
+				for _, itemId in ipairs(self.ownedItemIds) do
+					self.selectedLootItemIds[#self.selectedLootItemIds + 1] = itemId
+				end
+				self.lootSelectionIndex = 1
+				self.selectedDestinationFloor = clamp(self.currentFloorIndex + 1, 0, #self.gameData.floors)
+				self:startResultCutscene(cutsceneLines)
+				self.screenState = "loot_select"
+				self.cutsceneTimer = 0
+				return
+			else
+				self.lastRunSummary = "No loot found"
+			end
 		else
 			self.lastRunSummary = selectedCharacter.name .. " survived floor " .. tostring(self.currentFloorIndex)
 		end
@@ -410,7 +418,7 @@ function Game:moveToSelectedFloor()
 		minimumFloor = math.min(#self.gameData.floors, self.currentFloorIndex + 1)
 	end
 	local floorIndex = clamp(self.selectedDestinationFloor, minimumFloor, #self.gameData.floors)
-	local floorType = getFloorType(self.gameData, floorIndex)
+	local floorType = self.floorGenerator:getFloorType(self.gameData, floorIndex)
 
 	if self.currentFloorIndex == 0 then
 		self.currentFloorIndex = floorIndex
@@ -437,14 +445,14 @@ function Game:updateCharacterSelection()
 		return
 	end
 
-	if pd.buttonJustPressed(pd.kButtonUp) then
+	if pd.buttonJustPressed(pd.kButtonUp) or pd.buttonJustPressed(pd.kButtonLeft) then
 		repeat
 			self.selectedCharacterIndex = self.selectedCharacterIndex - 1
 			if self.selectedCharacterIndex < 1 then
 				self.selectedCharacterIndex = #self.characterOptions
 			end
 		until self:getSelectedCharacter().alive
-	elseif pd.buttonJustPressed(pd.kButtonDown) then
+	elseif pd.buttonJustPressed(pd.kButtonDown) or pd.buttonJustPressed(pd.kButtonRight) then
 		repeat
 			self.selectedCharacterIndex = self.selectedCharacterIndex + 1
 			if self.selectedCharacterIndex > #self.characterOptions then
@@ -512,6 +520,59 @@ function Game:updateFloorItemSelection()
 		self:resolveCurrentFloorEncounter()
 	elseif pd.buttonJustPressed(pd.kButtonLeft) then
 		self:closeFloorItemSelection()
+	end
+end
+
+function Game:updateLootSelection()
+	if #self.currentLootItems == 0 then
+		self.screenState = "character_select"
+		return
+	end
+
+	local allItemIds = {}
+	local seen = {}
+	for _, itemId in ipairs(self.currentLootItems) do
+		if not seen[itemId] then
+			allItemIds[#allItemIds + 1] = itemId
+			seen[itemId] = true
+		end
+	end
+
+	if pd.buttonJustPressed(pd.kButtonUp) then
+		self.lootSelectionIndex = self.lootSelectionIndex - 1
+		if self.lootSelectionIndex < 1 then
+			self.lootSelectionIndex = #allItemIds
+		end
+	elseif pd.buttonJustPressed(pd.kButtonDown) then
+		self.lootSelectionIndex = self.lootSelectionIndex + 1
+		if self.lootSelectionIndex > #allItemIds then
+			self.lootSelectionIndex = 1
+		end
+	elseif pd.buttonJustPressed(pd.kButtonA) then
+		local itemId = allItemIds[self.lootSelectionIndex]
+		if containsValue(self.selectedLootItemIds, itemId) then
+			removeValue(self.selectedLootItemIds, itemId)
+		else
+			if #self.selectedLootItemIds >= 2 then
+				self.lastRunSummary = "Can only carry 2 items"
+			else
+				self.selectedLootItemIds[#self.selectedLootItemIds + 1] = itemId
+			end
+		end
+	elseif pd.buttonJustPressed(pd.kButtonB) then
+		self.ownedItemIds = {}
+		for _, itemId in ipairs(self.selectedLootItemIds) do
+			self.ownedItemIds[#self.ownedItemIds + 1] = itemId
+		end
+		local kept = #self.selectedLootItemIds
+		self.currentLootItems = {}
+		self.selectedLootItemIds = {}
+		self.screenState = "character_select"
+		if kept > 0 then
+			self.lastRunSummary = "Kept " .. kept .. " item(s), dropped the rest"
+		else
+			self.lastRunSummary = "Dropped all items"
+		end
 	end
 end
 
@@ -599,7 +660,7 @@ function Game:drawFloorEquipUi()
 	if DEBUG_MODE then
 	local selectedCharacter = self:getSelectedCharacter()
 		if selectedCharacter then
-			local floorType = getFloorType(self.gameData, self.currentFloorIndex)
+			local floorType = self.floorGenerator:getFloorType(self.gameData, self.currentFloorIndex)
 			local preview = self.floorChallengeSystem:getFloorPreview(floorType, selectedCharacter, self.pendingEquippedItemIds)
 			gfx.drawText("Character: " .. selectedCharacter.name, 20, 172)
 			gfx.drawText("Floor: " .. tostring(floorType), 20, 188)
@@ -639,7 +700,7 @@ function Game:drawFloorValueDebugPanel()
 	local previewItemIds = self:getCurrentPreviewItemIds()
 
 	for floorNumber = startFloor, endFloor do
-		local floorType = getFloorType(self.gameData, floorNumber)
+		local floorType = self.floorGenerator:getFloorType(self.gameData, floorNumber)
 		local preview = self.floorChallengeSystem:getFloorPreview(floorType, selectedCharacter, previewItemIds)
 
 		local marker = " "
@@ -665,43 +726,143 @@ function Game:drawFloorValueDebugPanel()
 	end
 end
 
-function Game:drawCharacterSelectionUi()
-	local startX = 20
-	local startY = 140
-	local lineHeight = 18
-	local panelWidth = 170
-	local panelHeight = 20 + (#self.characterOptions * lineHeight) + 8
+function Game:drawLootSelectionUi()
+	local lootOptions = {}
+	local seen = {}
+	for _, itemId in ipairs(self.currentLootItems) do
+		if not seen[itemId] then
+			lootOptions[#lootOptions + 1] = { id = itemId, name = itemId:gsub("_", " "), isNew = true }
+			seen[itemId] = true
+		end
+	end
+
+	local panelHeight = 22 + (#lootOptions * 16) + (4 * 16) + 8
 
 	gfx.setColor(gfx.kColorWhite)
-	gfx.fillRect(startX - 8, startY - 8, panelWidth, panelHeight)
+	gfx.fillRect(60, 24, 280, panelHeight)
 	gfx.setColor(gfx.kColorBlack)
-	gfx.drawRect(startX - 8, startY - 8, panelWidth, panelHeight)
+	gfx.drawRect(60, 24, 280, panelHeight)
 
-	gfx.drawText("Choose character:", startX, startY)
+	local y = 32
+	gfx.drawText("Select up to 2 items to keep:", 68, y)
+	y = y + 16
 
-	for index, characterId in ipairs(self.characterOptions) do
-		local character = self.characters[characterId]
+	for index, itemOption in ipairs(lootOptions) do
 		local cursor = "  "
-		if index == self.selectedCharacterIndex then
+		if index == self.lootSelectionIndex then
 			cursor = "> "
 		end
 
-		local stateSuffix = ""
-		if not character.alive then
-			stateSuffix = " (DEAD)"
+		local marker = "[ ] "
+		if containsValue(self.selectedLootItemIds, itemOption.id) then
+			marker = "[x] "
 		end
 
-		gfx.drawText(cursor .. character.name .. stateSuffix, startX, startY + (index * lineHeight))
+		gfx.drawText(cursor .. marker .. itemOption.name, 68, y)
+		y = y + 16
 	end
 
-	gfx.drawText("Floor: " .. tostring(self.currentFloorIndex) .. "/" .. tostring(#self.gameData.floors), startX, startY + panelHeight)
-	gfx.drawText("Target: " .. tostring(self.selectedDestinationFloor), startX, startY + panelHeight + 16)
-	gfx.drawText(self.lastRunSummary, startX, startY + panelHeight + 32)
-	gfx.drawText("Items owned: " .. joinItemNames(self.ownedItemIds), startX, startY + panelHeight + 48)
-	gfx.drawText("Planned equip: " .. joinItemNames(self.pendingEquippedItemIds), startX, startY + panelHeight + 64)
-	gfx.drawText("A = choose items", startX, startY + panelHeight + 80)
-	gfx.drawText("B = close door", startX, startY + panelHeight + 96)
-	gfx.drawText("After item confirm: character vs floor", startX, startY + panelHeight + 112)
+	gfx.drawText("A = toggle item", 68, y)
+	y = y + 16
+	gfx.drawText("B = confirm selection", 68, y)
+	y = y + 16
+	gfx.drawText("Unselected items will be lost", 68, y)
+	y = y + 16
+	gfx.drawText("Carrying: " .. #self.selectedLootItemIds .. "/2", 68, y)
+
+	gfx.drawText(self.lastRunSummary, 20, 200)
+end
+
+function Game:drawCharacterSelectionUi()
+	local centerX = 200
+	local carouselY = 55
+
+	local carouselSlots = {
+		{ offset = -2, size = 36, x = 18, y = carouselY + 22 },
+		{ offset = -1, size = 52, x = 85, y = carouselY + 12 },
+		{ offset =  0, size = 80, x = 160, y = carouselY },
+		{ offset =  1, size = 52, x = 263, y = carouselY + 12 },
+		{ offset =  2, size = 36, x = 346, y = carouselY + 22 },
+	}
+
+	local totalChars = #self.characterOptions
+
+	for _, slot in ipairs(carouselSlots) do
+		local charIndex = self.selectedCharacterIndex + slot.offset
+
+		while charIndex < 1 do
+			charIndex = charIndex + totalChars
+		end
+		while charIndex > totalChars do
+			charIndex = charIndex - totalChars
+		end
+
+		local characterId = self.characterOptions[charIndex]
+		local character = self.characters[characterId]
+		local charImage = self.images.characters[characterId]
+
+		local drawX = slot.x
+		local drawY = slot.y
+		local size = slot.size
+
+		if charImage then
+			local imgWidth, imgHeight = charImage:getSize()
+			local scaleX = size / imgWidth
+			local scaleY = size / imgHeight
+
+			if not character.alive then
+				gfx.pushContext()
+				gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+				charImage:drawScaled(drawX, drawY, scaleX, scaleY)
+				gfx.setImageDrawMode(gfx.kDrawModeFillBlack)
+				gfx.setDitherPattern(0.5)
+				gfx.fillRect(drawX, drawY, size, size)
+				gfx.setImageDrawMode(gfx.kDrawModeCopy)
+				gfx.popContext()
+			else
+				charImage:drawScaled(drawX, drawY, scaleX, scaleY)
+			end
+		else
+			gfx.setColor(gfx.kColorWhite)
+			gfx.fillRect(drawX, drawY, size, size)
+			gfx.setColor(gfx.kColorBlack)
+			gfx.drawRect(drawX, drawY, size, size)
+			drawCenteredText(character.name, drawX + (size / 2), drawY + (size / 2) - 4)
+		end
+
+		if slot.offset == 0 then
+			gfx.setColor(gfx.kColorBlack)
+			gfx.setLineWidth(2)
+			gfx.drawRect(drawX - 2, drawY - 2, size + 4, size + 4)
+			gfx.setLineWidth(1)
+		end
+
+		local nameY = drawY + size + 4
+		local nameColor = character.alive and gfx.kColorBlack or gfx.kColorWhite
+		gfx.setColor(nameColor)
+		drawCenteredText(character.name, drawX + (size / 2), nameY)
+
+		if not character.alive then
+			drawCenteredText("DEAD", drawX + (size / 2), nameY + 12)
+		end
+	end
+
+	local infoY = 178
+	local lineHeight = 16
+
+	gfx.setColor(gfx.kColorWhite)
+	gfx.fillRect(10, infoY - 4, 380, 62)
+	gfx.setColor(gfx.kColorBlack)
+	gfx.drawRect(10, infoY - 4, 380, 62)
+
+	gfx.drawText("Floor: " .. tostring(self.currentFloorIndex) .. "/" .. tostring(#self.gameData.floors), 20, infoY)
+	gfx.drawText("Items: " .. joinItemNames(self.ownedItemIds), 20, infoY + lineHeight)
+	gfx.drawText(self.lastRunSummary, 20, infoY + lineHeight * 2)
+
+	gfx.drawText("A = equip items", 240, infoY)
+	gfx.drawText("B = close door", 240, infoY + lineHeight)
+	gfx.drawText("< > switch character", 240, infoY + lineHeight * 2)
+
 	if DEBUG_MODE then
 		self:drawFloorValueDebugPanel()
 	end
@@ -751,6 +912,31 @@ function Game:drawResultCutsceneUi()
 	end
 end
 
+function Game:drawExitLockedUi()
+	gfx.setColor(gfx.kColorWhite)
+	gfx.fillRect(24, 52, 352, 120)
+	gfx.setColor(gfx.kColorBlack)
+	gfx.drawRect(24, 52, 352, 120)
+
+	drawCenteredText("EXIT LOCKED", 200, 72)
+	drawCenteredText("You need the Exit Key", 200, 96)
+	drawCenteredText("to unlock this door.", 200, 112)
+	drawCenteredText("Press A/B to go back", 200, 148)
+end
+
+function Game:drawVictoryUi()
+	gfx.setColor(gfx.kColorWhite)
+	gfx.fillRect(24, 36, 352, 170)
+	gfx.setColor(gfx.kColorBlack)
+	gfx.drawRect(24, 36, 352, 170)
+
+	drawCenteredText("YOU WIN!", 200, 64)
+	drawCenteredText("You escaped the building!", 200, 96)
+	drawCenteredText("Floor " .. tostring(self.currentFloorIndex), 200, 116)
+	drawCenteredText(self.lastRunSummary, 200, 140)
+	drawCenteredText("Press A/B to play again", 200, 176)
+end
+
 -- function Game:drawFloorIndicator()
 --     local boxWidth = 140
 --     local boxHeight = 36
@@ -783,6 +969,17 @@ function Game:update()
 		self:updateFloorItemSelection()
 	elseif self.screenState == "result_cutscene" then
 		self:updateResultCutscene()
+	elseif self.screenState == "loot_select" then
+		self:updateLootSelection()
+	elseif self.screenState == "exit_locked" then
+		if pd.buttonJustPressed(pd.kButtonA) or pd.buttonJustPressed(pd.kButtonB) then
+			self.screenState = "character_select"
+			self.selectedDestinationFloor = clamp(self.currentFloorIndex + 1, 0, #self.gameData.floors)
+		end
+	elseif self.screenState == "victory" then
+		if pd.buttonJustPressed(pd.kButtonA) or pd.buttonJustPressed(pd.kButtonB) then
+			self:restartGame()
+		end
 	elseif self.screenState == "game_over" then
 		if pd.buttonJustPressed(pd.kButtonA) or pd.buttonJustPressed(pd.kButtonB) then
 			self:restartGame()
@@ -796,7 +993,6 @@ function Game:update()
 			self.screenState = "closed_floor"
 			self.selectedDestinationFloor = self.currentFloorIndex
 			self.lastCrankStep = self.crankSystem:getValue()
-			-- self.lastRunSummary = "Doors closed. Rotate crank to move floors."
 		end
 	end
 end
@@ -805,7 +1001,7 @@ function Game:draw()
 	gfx.clear(gfx.kColorWhite)
 
 	local backgroundToDraw = self.images.alternateBackground
-	if self.screenState == "starting_loadout" or self.screenState == "closed_floor" or self.screenState == "result_cutscene" then
+	if self.screenState == "starting_loadout" or self.screenState == "closed_floor" or self.screenState == "result_cutscene" or self.screenState == "loot_select" or self.screenState == "exit_locked" or self.screenState == "victory" then
 		backgroundToDraw = self.images.defaultBackground
 	end
 
@@ -813,7 +1009,6 @@ function Game:draw()
 		backgroundToDraw:draw(0, 0)
 	end
 
-	-- Draw white rectangle background
 	local boxWidth = 50
 	local boxHeight = 16
 	local boxX = self.numberX - (boxWidth / 2)
@@ -824,25 +1019,21 @@ function Game:draw()
 	gfx.setColor(gfx.kColorBlack)
 	gfx.drawRect(boxX, boxY, boxWidth, boxHeight)
 
-	-- Draw text centered in the box
 	gfx.setColor(gfx.kColorBlack)
-	drawCenteredText(tostring(self.crankSystem:getValue()), self.numberX, 40)
-
-	local text = "Rotate crank 360 deg = move 1 floor"
-
+	drawCenteredText(tostring(self.currentFloorIndex), self.numberX, 40)
 
 	if self.screenState == "starting_loadout" then
 		self:drawStartingLoadoutUi()
-	elseif self.screenState == "closed_floor" then
-		-- self:drawFloorIndicator()
-		-- drawCenteredText("Floor " .. tostring(self.currentFloorIndex), 200, 32)
-		-- drawCenteredText("Doors closed", 200, 48)
-		-- drawCenteredText("Rotate crank 360 deg = move 1 floor", 200, 64)
-		-- drawCenteredText("B = open door and resolve", 200, 80)
 	elseif self.screenState == "item_select" then
 		self:drawFloorEquipUi()
 	elseif self.screenState == "result_cutscene" then
 		self:drawResultCutsceneUi()
+	elseif self.screenState == "loot_select" then
+		self:drawLootSelectionUi()
+	elseif self.screenState == "exit_locked" then
+		self:drawExitLockedUi()
+	elseif self.screenState == "victory" then
+		self:drawVictoryUi()
 	elseif self.screenState == "game_over" then
 		self:drawGameOverUi()
 	elseif self.screenState == "character_select" then
