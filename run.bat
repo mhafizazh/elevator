@@ -25,7 +25,7 @@ if not exist "%SIM%" (
 
 set "BUILD_DIR=build"
 set "TMP_SOURCE=%BUILD_DIR%\tmp_source"
-set "PDX_DIR=%BUILD_DIR%\azhari.pdx"
+set "PDX_DIR=%BUILD_DIR%\Azhari.pdx"
 
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
