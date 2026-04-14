@@ -58,10 +58,6 @@ local function joinItems(equippedItemIds)
 end
 
 function FloorChallengeSystem:printDebugLog(lines)
-    if not DEBUG_MODE then
-        return
-    end
-
     for _, line in ipairs(lines) do
         print(line)
     end
@@ -173,8 +169,8 @@ function FloorChallengeSystem:enterFloor(floorNumber, floorType, character, equi
             lines[#lines + 1] = "Exit floor reached. Win condition triggered."
         end
     else
-        lines[#lines + 1] = "Result: DIED"
-        lines[#lines + 1] = character.name .. " died on floor " .. tostring(floorNumber) .. " (" .. tostring(result.deathReason) .. ")"
+        lines[#lines + 1] = "Result: FAILED"
+        lines[#lines + 1] = character.name .. " failed floor " .. tostring(floorNumber) .. " (" .. tostring(result.deathReason) .. ")"
     end
 
     self:printDebugLog(lines)
