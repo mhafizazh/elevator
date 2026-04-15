@@ -47,6 +47,25 @@ local function buildSortedItemOptions()
 	return itemOptions
 end
 
+local function buildStartingItemOptions()
+	-- Limited set of 5 starting items (excluding collectible-only items like backpack)
+	local startingItemIds = { "gun", "knife", "flashlight", "gas_mask", "medkit" }
+	local itemOptions = {}
+	
+	for _, itemId in ipairs(startingItemIds) do
+		local item = Items[itemId]
+		if item then
+			itemOptions[#itemOptions + 1] = { id = itemId, name = item.name }
+		end
+	end
+
+	table.sort(itemOptions, function(left, right)
+		return left.name < right.name
+	end)
+
+	return itemOptions
+end
+
 local function containsValue(values, target)
 	for _, value in ipairs(values) do
 		if value == target then
@@ -213,13 +232,14 @@ function Game.new()
 	self.numberY = 50
 	self.floorChallengeSystem = FloorChallengeSystem.new()
 	self.floorGenerator = FloorGenerator.new()
-	local generatedFloors, generatedLoot, exitKeyFloor = self.floorGenerator:generate()
-	self.gameData = { floors = generatedFloors, lootByFloor = generatedLoot, exitKeyFloor = exitKeyFloor }
+	local generatedFloors, generatedLoot, exitKeyFloor, generatedCollectibles = self.floorGenerator:generate()
+	self.gameData = { floors = generatedFloors, lootByFloor = generatedLoot, exitKeyFloor = exitKeyFloor, collectibleByFloor = generatedCollectibles }
 	self.currentFloorIndex = 0
 	self.lastRunSummary = ""
 	self.lastChallengeDebugLines = {}
 	self.screenState = "starting_loadout"
 	self.itemOptions = buildSortedItemOptions()
+	self.startingItemOptions = buildStartingItemOptions()
 	self.startingInventorySelectionIndex = 1
 	self.floorItemSelectionIndex = 1
 	self.selectedStartingItemIds = {}
@@ -234,6 +254,13 @@ function Game.new()
 	self.currentLootItems = {}
 	self.selectedLootItemIds = {}
 	self.lootSelectionIndex = 1
+	self.currentCollectibleItems = {}
+	self.collectibleSelectionIndex = 1
+	self.collectibleForReplacement = nil
+	self.selectedCollectibleItemIds = {}
+	self.maxCollectibleCapacity = 2
+	self.hasBackpackFound = false
+	self.lastFloorSurvived = false
 	self.cachedFloorDialogue = ""
 	self.cachedDialogueFloor = -1
 	self.showKeyCutscene = false
@@ -243,6 +270,7 @@ function Game.new()
 		character_select = false,
 		item_select = false,
 		loot_select = false,
+		item_collection = false,
 		results = false,
 	}
 
@@ -382,6 +410,7 @@ function Game:resolveCurrentFloorEncounter()
 	}
 
 	local showKeyImage = false
+	self.lastFloorSurvived = result.survived
 	if result.survived then
 		if self.currentFloorIndex == self.gameData.exitKeyFloor then
 			self.hasExitKey = true
@@ -435,7 +464,20 @@ function Game:updateResultCutscene()
 	if self.cutsceneTimer <= 0 then
 		self.tutorialsShown.results = true
 		if self.screenState ~= "game_over" then
-			self.screenState = "character_select"
+			-- Only show item collection if character survived
+			if self.lastFloorSurvived then
+				-- Check for collectible items on this floor
+				local currentFloor = self.currentFloorIndex
+				if self.gameData.collectibleByFloor and self.gameData.collectibleByFloor[currentFloor] and #self.gameData.collectibleByFloor[currentFloor] > 0 then
+					self.currentCollectibleItems = cloneList(self.gameData.collectibleByFloor[currentFloor])
+					self:openItemCollection()
+				else
+					self.screenState = "closed_floor"
+				end
+			else
+				-- Character died, go to closed_floor to select another character
+				self.screenState = "closed_floor"
+			end
 		end
 	end
 end
@@ -502,6 +544,44 @@ function Game:confirmStartingInventory()
 	self.lastRunSummary = "Rotate crank to move upstairs."
 end
 
+function Game:openItemCollection()
+	self.tutorialsShown.item_collection = true
+	self.collectibleSelectionIndex = 1
+	self.collectibleForReplacement = nil
+	self.selectedCollectibleItemIds = {}
+	
+	-- Process backpack silently (increase capacity) and remove from display
+	local displayItems = {}
+	for _, itemId in ipairs(self.currentCollectibleItems) do
+		if itemId == "backpack" then
+			-- Backpack increases capacity by 5 automatically, don't show it
+			self.maxCollectibleCapacity = self.maxCollectibleCapacity + 5
+			self.hasBackpackFound = true
+		else
+			displayItems[#displayItems + 1] = itemId
+		end
+	end
+	
+	self.currentCollectibleItems = displayItems
+	
+	if #self.currentCollectibleItems == 0 then
+		-- No items to display, go back to character select
+		self.screenState = "character_select"
+		self.lastRunSummary = "No items to collect."
+	else
+		self.screenState = "item_collection"
+		self.lastRunSummary = "Select items to collect with A, then B to confirm."
+	end
+end
+
+function Game:closeItemCollection()
+	self.screenState = "closed_floor"
+	self.lastRunSummary = "A selects character. B opens door."
+	self.currentCollectibleItems = {}
+	self.selectedCollectibleItemIds = {}
+	self.collectibleSelectionIndex = 1
+end
+
 function Game:openFloorItemSelection()
 	self.tutorialsShown.character_select = true
 	if #self.pendingEquippedItemIds == 0 then
@@ -509,7 +589,8 @@ function Game:openFloorItemSelection()
 	end
 	self.floorItemSelectionIndex = 1
 	self.screenState = "item_select"
-	self.lastRunSummary = "Select up to 2 items, then press B to confirm"
+	local itemLimit = self.hasBackpackFound and 2 or 1
+	self.lastRunSummary = "Select up to " .. itemLimit .. " item(s), then press B to confirm"
 end
 
 function Game:closeFloorItemSelection()
@@ -576,15 +657,15 @@ function Game:updateStartingLoadoutSelection()
 	if pd.buttonJustPressed(pd.kButtonUp) then
 		self.startingInventorySelectionIndex = self.startingInventorySelectionIndex - 1
 		if self.startingInventorySelectionIndex < 1 then
-			self.startingInventorySelectionIndex = #self.itemOptions
+			self.startingInventorySelectionIndex = #self.startingItemOptions
 		end
 	elseif pd.buttonJustPressed(pd.kButtonDown) then
 		self.startingInventorySelectionIndex = self.startingInventorySelectionIndex + 1
-		if self.startingInventorySelectionIndex > #self.itemOptions then
+		if self.startingInventorySelectionIndex > #self.startingItemOptions then
 			self.startingInventorySelectionIndex = 1
 		end
 	elseif pd.buttonJustPressed(pd.kButtonA) then
-		local itemOption = self.itemOptions[self.startingInventorySelectionIndex]
+		local itemOption = self.startingItemOptions[self.startingInventorySelectionIndex]
 		local changed = self:toggleSelectionItem(self.selectedStartingItemIds, itemOption.id, STARTING_ITEM_LIMIT)
 		if not changed then
 			self.lastRunSummary = "Starting loadout full"
@@ -620,9 +701,11 @@ function Game:updateFloorItemSelection()
 		end
 	elseif pd.buttonJustPressed(pd.kButtonA) then
 		local itemOption = ownedItemOptions[self.floorItemSelectionIndex]
-		local changed = self:toggleSelectionItem(self.pendingEquippedItemIds, itemOption.id, FLOOR_EQUIP_LIMIT)
+		local equipLimit = self.hasBackpackFound and 2 or 1
+		local changed = self:toggleSelectionItem(self.pendingEquippedItemIds, itemOption.id, equipLimit)
 		if not changed then
-			self.lastRunSummary = "Only 2 items can be equipped"
+			local limitText = self.hasBackpackFound and "Only 2 items" or "Only 1 item"
+			self.lastRunSummary = limitText .. " can be equipped"
 		else
 			self.lastRunSummary = "Equipped: " .. joinItemNames(self.pendingEquippedItemIds)
 		end
@@ -630,6 +713,46 @@ function Game:updateFloorItemSelection()
 		self:resolveCurrentFloorEncounter()
 	elseif pd.buttonJustPressed(pd.kButtonLeft) then
 		self:closeFloorItemSelection()
+	end
+end
+
+function Game:updateItemCollection()
+	if #self.currentCollectibleItems == 0 then
+		self.screenState = "character_select"
+		return
+	end
+
+	if self.screenState ~= "item_collection" then
+		return
+	end
+
+	if pd.buttonJustPressed(pd.kButtonUp) then
+		self.collectibleSelectionIndex = self.collectibleSelectionIndex - 1
+		if self.collectibleSelectionIndex < 1 then
+			self.collectibleSelectionIndex = #self.currentCollectibleItems
+		end
+	elseif pd.buttonJustPressed(pd.kButtonDown) then
+		self.collectibleSelectionIndex = self.collectibleSelectionIndex + 1
+		if self.collectibleSelectionIndex > #self.currentCollectibleItems then
+			self.collectibleSelectionIndex = 1
+		end
+	elseif pd.buttonJustPressed(pd.kButtonA) then
+		local itemOption = self.currentCollectibleItems[self.collectibleSelectionIndex]
+		local remainingCapacity = self.maxCollectibleCapacity - #self.ownedItemIds
+		local changed = self:toggleSelectionItem(self.selectedCollectibleItemIds, itemOption, remainingCapacity)
+		if not changed then
+			self.lastRunSummary = "Inventory at max capacity"
+		else
+			self.lastRunSummary = "Selected: " .. joinItemNames(self.selectedCollectibleItemIds)
+		end
+	elseif pd.buttonJustPressed(pd.kButtonB) then
+		-- Confirm selection and add to inventory
+		for _, itemId in ipairs(self.selectedCollectibleItemIds) do
+			if #self.ownedItemIds < self.maxCollectibleCapacity then
+				self.ownedItemIds[#self.ownedItemIds + 1] = itemId
+			end
+		end
+		self:closeItemCollection()
 	end
 end
 
@@ -689,7 +812,9 @@ end
 
 function Game:drawSelectableItemList(title, itemOptions, selectedItemIds, selectedIndex, panelX, panelY, panelWidth, footerLines)
 	local lineHeight = 16
-	local panelHeight = 22 + (#itemOptions * lineHeight) + (#footerLines * lineHeight) + 8
+	local maxVisibleItems = 6 -- Maximum items to show before needing to scroll
+	local actualItemsCount = math.min(#itemOptions, maxVisibleItems)
+	local panelHeight = 22 + (actualItemsCount * lineHeight) + (#footerLines * lineHeight) + 8
 
 	gfx.setColor(gfx.kColorWhite)
 	gfx.fillRect(panelX, panelY, panelWidth, panelHeight)
@@ -700,19 +825,28 @@ function Game:drawSelectableItemList(title, itemOptions, selectedItemIds, select
 	gfx.drawText(title, panelX + 8, y)
 	y = y + lineHeight
 
+	-- Calculate scroll offset to keep selected item visible
+	local scrollOffset = 0
+	if selectedIndex > maxVisibleItems then
+		scrollOffset = selectedIndex - maxVisibleItems
+	end
+
 	for index, itemOption in ipairs(itemOptions) do
-		local cursor = "  "
-		if index == selectedIndex then
-			cursor = "> "
-		end
+		-- Skip items that are above the scroll offset
+		if index > scrollOffset and index <= scrollOffset + maxVisibleItems then
+			local cursor = "  "
+			if index == selectedIndex then
+				cursor = "> "
+			end
 
-		local marker = "[ ] "
-		if containsValue(selectedItemIds, itemOption.id) then
-			marker = "[x] "
-		end
+			local marker = "[ ] "
+			if containsValue(selectedItemIds, itemOption.id) then
+				marker = "[x] "
+			end
 
-		gfx.drawText(cursor .. marker .. itemOption.name, panelX + 8, y)
-		y = y + lineHeight
+			gfx.drawText(cursor .. marker .. itemOption.name, panelX + 8, y)
+			y = y + lineHeight
+		end
 	end
 
 	for _, footerLine in ipairs(footerLines) do
@@ -724,7 +858,7 @@ end
 function Game:drawStartingLoadoutUi()
 	self:drawSelectableItemList(
 		"Choose starting items",
-		self.itemOptions,
+		self.startingItemOptions,
 		self.selectedStartingItemIds,
 		self.startingInventorySelectionIndex,
 		20,
@@ -749,6 +883,14 @@ function Game:drawFloorEquipUi()
 		"Left = back",
 		"Limit: " .. tostring(FLOOR_EQUIP_LIMIT),
 	}
+
+	if DEBUG_MODE then
+		gfx.drawText("DEBUG: Owned items: " .. #self.ownedItemIds, 20, 140)
+		gfx.drawText("DEBUG: Owned options: " .. #ownedItemOptions, 20, 156)
+		for i, itemId in ipairs(self.ownedItemIds) do
+			gfx.drawText("  " .. i .. ": " .. itemId, 20, 172 + (i * 12))
+		end
+	end
 
 	if #ownedItemOptions == 0 then
 		ownedItemOptions = { { id = "none", name = "No items owned" } }
@@ -840,6 +982,38 @@ function Game:drawFloorValueDebugPanel()
 		gfx.drawText(line, panelX + 6, y)
 		y = y + lineHeight
 	end
+end
+
+function Game:drawItemCollectionUi()
+	local collectibleOptions = {}
+	local seen = {}
+	for _, itemId in ipairs(self.currentCollectibleItems) do
+		if not seen[itemId] then
+			collectibleOptions[#collectibleOptions + 1] = { id = itemId, name = itemId:gsub("_", " ") }
+			seen[itemId] = true
+		end
+	end
+
+	if #collectibleOptions == 0 then
+		return
+	end
+
+	self:drawSelectableItemList(
+		"Select items to collect",
+		collectibleOptions,
+		self.selectedCollectibleItemIds,
+		self.collectibleSelectionIndex,
+		20,
+		24,
+		180,
+		{
+			"A = toggle item",
+			"B = confirm selection",
+			"Capacity: " .. (#self.ownedItemIds + #self.selectedCollectibleItemIds) .. "/" .. self.maxCollectibleCapacity,
+		}
+	)
+
+	gfx.drawText(self.lastRunSummary, 20, 200)
 end
 
 function Game:drawLootSelectionUi()
@@ -1140,6 +1314,8 @@ function Game:update()
 		self:updateFloorItemSelection()
 	elseif self.screenState == "result_cutscene" then
 		self:updateResultCutscene()
+	elseif self.screenState == "item_collection" then
+		self:updateItemCollection()
 	elseif self.screenState == "loot_select" then
 		self:updateLootSelection()
 	elseif self.screenState == "exit_locked" then
@@ -1172,7 +1348,7 @@ function Game:draw()
 	gfx.clear(gfx.kColorWhite)
 
 	local backgroundToDraw = self.images.alternateBackground
-	if self.screenState == "starting_loadout" or self.screenState == "closed_floor" or self.screenState == "result_cutscene" or self.screenState == "loot_select" or self.screenState == "exit_locked" or self.screenState == "victory" then
+	if self.screenState == "starting_loadout" or self.screenState == "closed_floor" or self.screenState == "result_cutscene" or self.screenState == "loot_select" or self.screenState == "item_collection" or self.screenState == "exit_locked" or self.screenState == "victory" then
 		backgroundToDraw = self.images.defaultBackground
 	end
 
@@ -1198,6 +1374,8 @@ function Game:draw()
 		self:drawFloorEquipUi()
 	elseif self.screenState == "result_cutscene" then
 		self:drawResultCutsceneUi()
+	elseif self.screenState == "item_collection" then
+		self:drawItemCollectionUi()
 	elseif self.screenState == "loot_select" then
 		self:drawLootSelectionUi()
 	elseif self.screenState == "exit_locked" then
@@ -1220,6 +1398,8 @@ function Game:draw()
 		self:drawTutorialBanner("Equip items to boost survival chances. (A) to toggle, (B) to face the danger!", 190)
 	elseif self.screenState == "result_cutscene" and not self.tutorialsShown.results then
 		self:drawTutorialBanner("This shows your survival roll. Higher stats = better chances. Press (A/B) to continue.", 0)
+	elseif self.screenState == "item_collection" and not self.tutorialsShown.item_collection then
+		self:drawTutorialBanner("Items found! Select an item then choose an inventory slot to replace. (A) to select, (B) when done.", 190)
 	elseif self.screenState == "loot_select" and not self.tutorialsShown.loot_select then
 		self:drawTutorialBanner("Safe room found! Select up to 2 items to keep. You can swap old items for new ones. (A) toggles, (B) confirms.", 190)
 	end
