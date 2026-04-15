@@ -162,39 +162,6 @@ function FloorGenerator:generate()
             rewardRemaining = FloorGenerator.CONFIG.rewardPerSegment
         end
 
-        local slotsRemaining = FloorGenerator.CONFIG.segmentSize - floorsInCurrentSegment
-        local floorsNeeded = totalFloors - 1 - #floors
-
-        if floorsNeeded <= slotsRemaining then
-            local dangerousToPlace = math.min(dangerousRemaining, floorsNeeded)
-            dangerousRemaining = dangerousRemaining - dangerousToPlace
-            floorsNeeded = floorsNeeded - dangerousToPlace
-
-            local safeToPlace = math.min(safeRemaining, floorsNeeded)
-            safeRemaining = safeRemaining - safeToPlace
-            floorsNeeded = floorsNeeded - safeToPlace
-
-            local rewardToPlace = math.min(rewardRemaining, floorsNeeded)
-            rewardRemaining = rewardRemaining - rewardToPlace
-            floorsNeeded = floorsNeeded - rewardToPlace
-
-            for _ = 1, floorsNeeded do
-                if dangerousRemaining > 0 then
-                    floors[#floors + 1] = self:_pickWeighted("dangerous", FloorGenerator.CONFIG.dangerousWeights)
-                    dangerousRemaining = dangerousRemaining - 1
-                elseif safeRemaining > 0 then
-                    floors[#floors + 1] = self:_pickWeighted("safe", FloorGenerator.CONFIG.safeWeights)
-                    safeRemaining = safeRemaining - 1
-                elseif rewardRemaining > 0 then
-                    floors[#floors + 1] = self:_pickWeighted("reward", FloorGenerator.CONFIG.rewardWeights)
-                    rewardRemaining = rewardRemaining - 1
-                else
-                    floors[#floors + 1] = self:_pickWeighted("dangerous", FloorGenerator.CONFIG.dangerousWeights)
-                end
-            end
-            break
-        end
-
         local floorType
         if dangerousRemaining > 0 and (safeRemaining == 0 or math.random() < 0.6) then
             floorType = self:_pickWeighted("dangerous", FloorGenerator.CONFIG.dangerousWeights)

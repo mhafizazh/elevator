@@ -5,8 +5,11 @@ import "systems/floor_challenge_system"
 import "systems/floor_generator"
 import "core/data/characters"
 import "core/data/items"
+import "core/build_flags"
+import "core/game"
 
 local pd = playdate
+math.randomseed(pd.getSecondsSinceEpoch())
 local gfx = pd.graphics
 
 Game = {}
@@ -96,7 +99,96 @@ local function drawCenteredText(text, centerX, y)
 	gfx.drawText(text, math.floor(centerX - (textWidth / 2)), y)
 end
 
+local FloorHints = {
+	explored = {
+		"This floor is already explored",
+		"We went through here before",
+		"Nothing left here",
+	},
+	radiation = {
+		"It smells strange...",
+		"The air feels heavy here",
+		"I feel dizzy already",
+	},
+	criminal = {
+		"I hear shooting guns",
+		"Someone's in there...",
+		"Sounds like a firefight",
+	},
+	zombie = {
+		"Those sounds... not human",
+		"Something shuffles nearby",
+		"I hear groaning...",
+	},
+	trap = {
+		"This doesn't look right",
+		"Too quiet...",
+		"Something feels off",
+	},
+	safe = {
+		"Seems peaceful",
+		"We can rest here",
+		"Clear for now",
+	},
+	loot = {
+		"I see something shiny",
+		"There might be supplies",
+		"Could be useful loot",
+	},
+	exit = {
+		"Almost there!",
+		"The exit is close",
+		"End of the line",
+	},
+}
 
+local function getAliveCharacterNames(self)
+	local names = {}
+	for _, characterId in ipairs(self.characterOptions) do
+		if self.characters[characterId].alive then
+			names[#names + 1] = self.characters[characterId].name
+		end
+	end
+	return names
+end
+
+local function getRandomHint(floorType, isExplored)
+	if isExplored then
+		return FloorHints.explored[math.random(1, #FloorHints.explored)]
+	end
+	local hints = FloorHints[floorType]
+	if hints then
+		return hints[math.random(1, #hints)]
+	end
+	return ""
+end
+
+local function wrapText(text, maxWidth)
+	local words = {}
+	for word in text:gmatch("%S+") do
+		words[#words + 1] = word
+	end
+	
+	local lines = {}
+	local currentLine = ""
+	
+	for _, word in ipairs(words) do
+		local testLine = currentLine == "" and word or currentLine .. " " .. word
+		local textWidth = gfx.getTextSize(testLine)
+		if textWidth > maxWidth and currentLine ~= "" then
+			lines[#lines + 1] = currentLine
+			currentLine = word
+		else
+			currentLine = testLine
+		end
+	end
+	
+	if currentLine ~= "" then
+		lines[#lines + 1] = currentLine
+	end
+	
+	return lines
+end
 
 local function clamp(value, minValue, maxValue)
 	if value < minValue then
@@ -142,6 +234,17 @@ function Game.new()
 	self.currentLootItems = {}
 	self.selectedLootItemIds = {}
 	self.lootSelectionIndex = 1
+	self.cachedFloorDialogue = ""
+	self.cachedDialogueFloor = -1
+	self.showKeyCutscene = false
+	self.tutorialsShown = {
+		starting_loadout = false,
+		crank_up = false,
+		character_select = false,
+		item_select = false,
+		loot_select = false,
+		results = false,
+	}
 
 	self.characters = {}
 	self.characterOptions = {}
@@ -203,14 +306,16 @@ function Game:restartGame()
 	end
 end
 
-function Game:startResultCutscene(lines)
+function Game:startResultCutscene(lines, showKeyImage)
 	self.screenState = "result_cutscene"
 	self.cutsceneTimer = RESULT_CUTSCENE_FRAMES
 	self.cutsceneHoldTimer = RESULT_CUTSCENE_HOLD_FRAMES
 	self.cutsceneLines = lines or {}
+	self.showKeyCutscene = showKeyImage or false
 end
 
 function Game:resolveCurrentFloorEncounter()
+	self.tutorialsShown.item_select = true
 	if self.currentFloorIndex == 0 then
 		self.screenState = "character_select"
 		self.lastRunSummary = "Doors opened at floor 0"
@@ -276,11 +381,13 @@ function Game:resolveCurrentFloorEncounter()
 		result.survived and "Result: SURVIVED" or "Result: DIED",
 	}
 
+	local showKeyImage = false
 	if result.survived then
 		if self.currentFloorIndex == self.gameData.exitKeyFloor then
 			self.hasExitKey = true
 			self.lastRunSummary = "Found: Exit Key!"
 			cutsceneLines[#cutsceneLines + 1] = "Found: Exit Key!"
+			showKeyImage = true
 		elseif floorType == "loot" then
 			local lootItems = self.gameData.lootByFloor[self.currentFloorIndex]
 			if lootItems and #lootItems > 0 then
@@ -291,7 +398,7 @@ function Game:resolveCurrentFloorEncounter()
 				end
 				self.lootSelectionIndex = 1
 				self.selectedDestinationFloor = clamp(self.currentFloorIndex + 1, 0, #self.gameData.floors)
-				self:startResultCutscene(cutsceneLines)
+				self:startResultCutscene(cutsceneLines, showKeyImage)
 				self.screenState = "loot_select"
 				self.cutsceneTimer = 0
 				return
@@ -302,7 +409,7 @@ function Game:resolveCurrentFloorEncounter()
 			self.lastRunSummary = selectedCharacter.name .. " survived floor " .. tostring(self.currentFloorIndex)
 		end
 		self.selectedDestinationFloor = clamp(self.currentFloorIndex + 1, 0, #self.gameData.floors)
-		self:startResultCutscene(cutsceneLines)
+		self:startResultCutscene(cutsceneLines, showKeyImage)
 	else
 		selectedCharacter.alive = false
 		if self:isAnyCharacterAlive() then
@@ -326,6 +433,7 @@ function Game:updateResultCutscene()
 
 	self.cutsceneTimer = self.cutsceneTimer - 1
 	if self.cutsceneTimer <= 0 then
+		self.tutorialsShown.results = true
 		if self.screenState ~= "game_over" then
 			self.screenState = "character_select"
 		end
@@ -381,6 +489,7 @@ function Game:toggleSelectionItem(selectionList, itemId, limit)
 end
 
 function Game:confirmStartingInventory()
+	self.tutorialsShown.starting_loadout = true
 	self.ownedItemIds = {}
 	for _, itemId in ipairs(self.selectedStartingItemIds) do
 		self.ownedItemIds[#self.ownedItemIds + 1] = itemId
@@ -394,6 +503,7 @@ function Game:confirmStartingInventory()
 end
 
 function Game:openFloorItemSelection()
+	self.tutorialsShown.character_select = true
 	if #self.pendingEquippedItemIds == 0 then
 		self.pendingEquippedItemIds = {}
 	end
@@ -560,6 +670,7 @@ function Game:updateLootSelection()
 			end
 		end
 	elseif pd.buttonJustPressed(pd.kButtonB) then
+		self.tutorialsShown.loot_select = true
 		self.ownedItemIds = {}
 		for _, itemId in ipairs(self.selectedLootItemIds) do
 			self.ownedItemIds[#self.ownedItemIds + 1] = itemId
@@ -708,7 +819,12 @@ function Game:drawFloorValueDebugPanel()
 			marker = ">"
 		end
 
-		local floorLine = string.format("%s%02d %-10s %2d%%", marker, floorNumber, floorType, preview.chance)
+		local keyIndicator = ""
+		if floorNumber == self.gameData.exitKeyFloor then
+			keyIndicator = " [KEY]"
+		end
+
+		local floorLine = string.format("%s%02d %-10s %2d%%%s", marker, floorNumber, floorType, preview.chance, keyIndicator)
 		gfx.drawText(floorLine, panelX + 6, y)
 		y = y + lineHeight
 	end
@@ -807,20 +923,19 @@ function Game:drawCharacterSelectionUi()
 
 		if charImage then
 			local imgWidth, imgHeight = charImage:getSize()
-			local scaleX = size / imgWidth
-			local scaleY = size / imgHeight
+			local centerX = drawX + (size - imgWidth) / 2
 
 			if not character.alive then
 				gfx.pushContext()
 				gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-				charImage:drawScaled(drawX, drawY, scaleX, scaleY)
+				charImage:draw(centerX, drawY)
 				gfx.setImageDrawMode(gfx.kDrawModeFillBlack)
 				gfx.setDitherPattern(0.5)
 				gfx.fillRect(drawX, drawY, size, size)
 				gfx.setImageDrawMode(gfx.kDrawModeCopy)
 				gfx.popContext()
 			else
-				charImage:drawScaled(drawX, drawY, scaleX, scaleY)
+				charImage:draw(centerX, drawY)
 			end
 		else
 			gfx.setColor(gfx.kColorWhite)
@@ -855,13 +970,26 @@ function Game:drawCharacterSelectionUi()
 	gfx.setColor(gfx.kColorBlack)
 	gfx.drawRect(10, infoY - 4, 380, 62)
 
-	gfx.drawText("Floor: " .. tostring(self.currentFloorIndex) .. "/" .. tostring(#self.gameData.floors), 20, infoY)
-	gfx.drawText("Items: " .. joinItemNames(self.ownedItemIds), 20, infoY + lineHeight)
-	gfx.drawText(self.lastRunSummary, 20, infoY + lineHeight * 2)
+	if self.cachedDialogueFloor ~= self.currentFloorIndex then
+		local floorType = self.floorGenerator:getFloorType(self.gameData, self.currentFloorIndex)
+		local isExplored = self.resolvedFloors[self.currentFloorIndex] == true
+		local hint = getRandomHint(floorType, isExplored)
+		local aliveNames = getAliveCharacterNames(self)
+		local speaker = aliveNames[math.random(1, #aliveNames)] or "???"
+		self.cachedFloorDialogue = speaker .. ": \"" .. hint .. "\""
+		self.cachedDialogueFloor = self.currentFloorIndex
+	end
 
-	gfx.drawText("A = equip items", 240, infoY)
-	gfx.drawText("B = close door", 240, infoY + lineHeight)
-	gfx.drawText("< > switch character", 240, infoY + lineHeight * 2)
+	local maxTextWidth = 360
+	local lines = wrapText(self.cachedFloorDialogue, maxTextWidth)
+	local startY = infoY
+
+	for i, line in ipairs(lines) do
+		gfx.drawText(line, 20, startY + (i - 1) * lineHeight)
+		if startY + (i - 1) * lineHeight > infoY + 50 then
+			break
+		end
+	end
 
 	if DEBUG_MODE then
 		self:drawFloorValueDebugPanel()
@@ -891,6 +1019,24 @@ function Game:drawGameOverUi()
 end
 
 function Game:drawResultCutsceneUi()
+	if self.showKeyCutscene and self.images.keyCutscene then
+		self.images.keyCutscene:draw(0, 0)
+		
+		-- Draw a taller banner at the bottom for the text
+		gfx.setColor(gfx.kColorWhite)
+		gfx.fillRect(0, 200, 400, 40)
+		gfx.setColor(gfx.kColorBlack)
+		
+		drawCenteredText("You found the key!", 200, 204)
+		
+		if self.cutsceneHoldTimer <= 0 then
+			drawCenteredText("Press A/B to continue", 200, 224)
+		else
+			drawCenteredText("...", 200, 224)
+		end
+		return
+	end
+
 	-- Strong visual frame so the transition reads as a cutscene.
 	gfx.setColor(gfx.kColorWhite)
 	gfx.fillRect(24, 36, 352, 170)
@@ -922,6 +1068,28 @@ function Game:drawExitLockedUi()
 	drawCenteredText("You need the Exit Key", 200, 96)
 	drawCenteredText("to unlock this door.", 200, 112)
 	drawCenteredText("Press A/B to go back", 200, 148)
+end
+
+function Game:drawTutorialBanner(text, yPos)
+	local lines = wrapText(text, 360)
+	local lineHeight = 16
+	local padding = 6
+	local boxHeight = (#lines * lineHeight) + (padding * 2)
+	local startY = yPos or 0
+
+	gfx.setColor(gfx.kColorBlack)
+	gfx.fillRect(0, startY, 400, boxHeight)
+	gfx.setColor(gfx.kColorWhite)
+	gfx.drawRect(0, startY, 400, boxHeight)
+	
+	gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+	local textY = startY + padding
+	for i, line in ipairs(lines) do
+		drawCenteredText(line, 200, textY + (i - 1) * lineHeight)
+	end
+	
+	gfx.setImageDrawMode(gfx.kDrawModeCopy)
+	gfx.setColor(gfx.kColorBlack) -- Reset color
 end
 
 function Game:drawVictoryUi()
@@ -962,6 +1130,9 @@ function Game:update()
 		self:updateStartingLoadoutSelection()
 	elseif self.screenState == "closed_floor" then
 		if pd.buttonJustPressed(pd.kButtonB) then
+			if self.currentFloorIndex > 0 then
+				self.tutorialsShown.crank_up = true
+			end
 			self.screenState = "character_select"
 			self.lastRunSummary = "Doors opened at floor " .. tostring(self.currentFloorIndex)
 		end
@@ -1018,7 +1189,6 @@ function Game:draw()
 	gfx.fillRect(boxX, boxY, boxWidth, boxHeight)
 	gfx.setColor(gfx.kColorBlack)
 	gfx.drawRect(boxX, boxY, boxWidth, boxHeight)
-
 	gfx.setColor(gfx.kColorBlack)
 	drawCenteredText(tostring(self.currentFloorIndex), self.numberX, 40)
 
@@ -1038,5 +1208,19 @@ function Game:draw()
 		self:drawGameOverUi()
 	elseif self.screenState == "character_select" then
 		self:drawCharacterSelectionUi()
+	end
+
+	if self.screenState == "starting_loadout" and not self.tutorialsShown.starting_loadout then
+		self:drawTutorialBanner("Welcome to the Elevator! Your goal is the roof. First, select up to 3 starting items. (A) toggles, (B) confirms.", 190)
+	elseif self.screenState == "closed_floor" and self.currentFloorIndex == 0 and not self.tutorialsShown.crank_up then
+		self:drawTutorialBanner("Use the Playdate Crank to move the elevator up to Floor 1, then press (B) to open the doors.", 190)
+	elseif self.screenState == "character_select" and self.currentFloorIndex > 0 and not self.tutorialsShown.character_select then
+		self:drawTutorialBanner("Read the hint below! Use the D-Pad to pick the best family member for the danger, then press (A).", 0)
+	elseif self.screenState == "item_select" and not self.tutorialsShown.item_select then
+		self:drawTutorialBanner("Equip items to boost survival chances. (A) to toggle, (B) to face the danger!", 190)
+	elseif self.screenState == "result_cutscene" and not self.tutorialsShown.results then
+		self:drawTutorialBanner("This shows your survival roll. Higher stats = better chances. Press (A/B) to continue.", 0)
+	elseif self.screenState == "loot_select" and not self.tutorialsShown.loot_select then
+		self:drawTutorialBanner("Safe room found! Select up to 2 items to keep. You can swap old items for new ones. (A) toggles, (B) confirms.", 190)
 	end
 end
