@@ -1,77 +1,132 @@
-# AGENTS.md
+# AGENTS.md - Coding Guidelines for Agentic Developers
 
-## Project: Azhari (Playdate Game)
+This project is a Playdate game written in Lua. Use these guidelines when working on the codebase.
 
-Lua-based game for Playdate handheld console. Build requires Playdate SDK installed locally.
+## Build & Run Commands
 
-## Prerequisites
+### Building the Game
+```bash
+run.bat                    # Build and run the game in the Playdate simulator
+run.bat --debug            # Build with DEBUG_MODE enabled for debug output
+```
 
-- **PLAYDATE_SDK_PATH** environment variable must be set to the Playdate SDK root directory
-- Windows only (batch scripts assume Windows)
-- No external package manager; all Lua code is source-checked in
+**Requirements:** PLAYDATE_SDK_PATH environment variable must be set to your Playdate SDK installation.
 
-## Build & Run
+### Running a Built Game
+```bash
+run2.bat <game.pdx>        # Run a built .pdx file in the simulator
+run2.bat mouse.pdx         # Example: runs build\mouse.pdx
+```
 
-- **`run.bat`** — builds and runs the game in the Playdate Simulator
-  - Creates `/build/Azhari.pdx` (compiled game)
-  - Requires `PLAYDATE_SDK_PATH/bin/pdc.exe` and `PlaydateSimulator.exe` to exist
-  - Optional `--debug` flag: sets `DEBUG_MODE = true` in `core/build_flags.lua`
-  - Copies `source/` → `build/tmp_source/`, regenerates `build_flags.lua`, compiles, runs
+### Build Artifacts
+- Game is compiled to: `build/Azhari.pdx`
+- Source files are copied to: `build/tmp_source/` during build
+- Debug flags written to: `build/tmp_source/core/build_flags.lua`
 
-- **`run2.bat <game.pdx>`** — runs an already-built .pdx file in the Simulator
-  - Searches `build/` and recursively if only filename given
+**No automated tests or linters.** All validation is manual code review.
 
-## Source Structure
+## Code Style Guidelines
 
-### Core Game
-- **`source/main.lua`** — Playdate entry point; instantiates `Game` and calls `game:update()` + `game:draw()` each frame
-- **`source/core/game.lua`** — Refactored orchestrator (~250 lines); delegates to managers and renderers
+### Imports
+- Place all imports at the top of the file, before any code
+- Use `import "path/to/module"` syntax (Playdate-specific)
+- Organize imports in logical groups (CoreLibs, then core modules, then systems)
+- Example from main.lua:
+  ```lua
+  import "CoreLibs/graphics"
+  import "core/build_flags"
+  import "core/game"
+  ```
 
-### Modular Components
-- **`source/core/ui_state_manager.lua`** — All UI state (screen state, selection indices, tutorials, summary text)
-- **`source/core/inventory_manager.lua`** — All item/inventory state (owned items, equipment, loot, collectibles)
-- **`source/core/cutscene_manager.lua`** — Animation and cutscene state (timers, lines, debug output)
-- **`source/core/ui_renderer.lua`** — All rendering logic (~580 lines); routes to screen-specific renderers
-- **`source/core/input_handler.lua`** — All input handling (~310 lines); routes to screen-specific handlers
-- **`source/core/game_utilities.lua`** — Shared utilities (text, lists, dialogue system, UI helpers)
+### Formatting & Indentation
+- Use **tabs for indentation** (not spaces)
+- Each indentation level = 1 tab
+- Opening braces on same line: `function foo()\n\t...\nend`
+- No trailing whitespace
 
-### Data & Systems
-- **`source/core/build_flags.lua`** — Generated at build time; contains `DEBUG_MODE` flag
-- **`source/core/data/`** — Immutable data: `characters.lua`, `items.lua`
-- **`source/systems/`** — Game systems (floor generation, combat, survival, item effects, crank controls)
-- **`source/assets/`** — Images and sound references
+### Naming Conventions
+- **Classes/Modules:** PascalCase (e.g., `Game`, `InputHandler`, `UIStateManager`)
+- **Functions:** camelCase (e.g., `updateCrankFloorSelection()`, `getSelectedCharacter()`)
+- **Local variables:** snake_case (e.g., `current_floor`, `max_width`)
+- **Constants/Data tables:** ALL_CAPS or PascalCase (e.g., `Characters`, `Items`, `FloorHints`)
+- **Private functions:** prefix with underscore (e.g., `_internalHelper()`)
 
-## Architecture
+### Types & Data Structures
+- Use local variable declarations: `local pd = playdate`
+- Explicit table creation for class instances: `local self = setmetatable({}, ClassName)`
+- Store metadata in `__index`: `ClassName.__index = ClassName`
+- Always return `self` from constructor functions
+- Use descriptive field names in state objects
 
-The game follows a **modular, manager-based architecture**:
+### Class Pattern
+All major classes follow this pattern (see game.lua, input_handler.lua):
+```lua
+ClassName = {}
+ClassName.__index = ClassName
 
-- **UIStateManager**: Centralizes all UI state (screen transitions, selection indices, tutorial flags)
-- **InventoryManager**: Manages all item state (owned inventory, equipment, loot selection, collectibles)
-- **CutsceneManager**: Handles animation timers and cutscene content
-- **UIRenderer**: Routes screen rendering to specialized render methods based on `screenState`
-- **InputHandler**: Routes button/crank input to specialized handlers based on `screenState`
-- **GameUtilities**: Pure utility functions for common operations (text wrapping, list operations, dialogue)
-- **Game class**: Simplified orchestrator that delegates to managers and renders
+function ClassName.new(...)
+  local self = setmetatable({}, ClassName)
+  -- Initialization
+  return self
+end
 
-This architecture provides:
-- **Separation of concerns**: State, rendering, and input are decoupled
-- **Testability**: Each manager can be tested independently
-- **Maintainability**: Changes to one system don't cascade to others
-- **Extensibility**: New screens/items/mechanics can be added without modifying core game logic
+function ClassName:methodName()
+  -- Methods use : notation for self parameter
+end
+```
 
-## Key Quirks
+### Comments & Documentation
+- Section headers: `-- === SECTION NAME ===` (centered with ===)
+- Subsection headers: `-- === SUBSECTION ===`
+- Comment complex logic blocks, not obvious code
+- Document function parameters if non-obvious
+- Example: `-- Limited set of 5 starting items (excluding collectible-only items)`
 
-- **Temporary build directory**: `run.bat` creates `build/tmp_source/` and deletes it before each build
-- **Debug flag injection**: `run.bat` always regenerates `source/core/build_flags.lua` on build; do not edit it manually
-- **No tests**: No CI, no test suite, no linting or type-checking
-- **Playdate SDK paths**: Scripts fail silently if SDK paths don't exist; verify SDK installation before debugging "not found" errors
-- **Multiple .pdx builds in build/**: Directory contains `Azhari.pdx`, `Barber/`, `Kurtin/`, `Rho/` — only `Azhari.pdx` is the main game
-- **Manager initialization**: All managers must be created in `Game.new()` and stored as instance variables for access from other managers
-- **Screen state routing**: All rendering and input is routed through `screenState` string; adding new screens requires updates to UIRenderer and InputHandler dispatchers
+### Error Handling
+- Use defensive nil checks before accessing table fields
+- Check table contents before iteration: `if itemIds and #itemIds > 0 then ... end`
+- Validate input parameters early: `if not character or not character.stats then return nil end`
+- Return nil or false on invalid state rather than raising errors
+- Use `if item then` pattern to safely check if table entry exists
 
-## Development
+### Utility Functions
+- Place utility functions in dedicated utility files (e.g., `game_utilities.lua`)
+- Group related utilities together with section comments
+- Use helper functions for common operations:
+  - `clamp(value, min, max)` - constrain values to range
+  - `containsValue(list, target)` - check table membership
+  - `wrapText(text, maxWidth)` - text wrapping with width limit
+  - `cloneList(values)` - safe table copying
 
-- Edit Lua in `source/` only
-- To rebuild and test: run `run.bat` (or `run.bat --debug` for debug mode)
-- Simulator runs immediately after successful build
-- No hot reload; full rebuild required for changes
+### Function Organization
+- Group related functions with section headers
+- Order within sections: initialization → getters → setters → logic → utilities
+- Keep functions focused and under 50 lines when possible
+- Use early returns to reduce nesting
+
+### Lua-Specific Patterns
+- Use `#table` for table length (array indexing starts at 1)
+- Use `ipairs()` for arrays, `pairs()` for sparse/key tables
+- Prefer table concatenation: `table.concat(names, ", ")`
+- Use string methods: `text:gmatch()`, `text:sub()`
+- Store reference: `local gfx = playdate.graphics` for frequently used APIs
+
+## Project Structure
+
+- `source/main.lua` - Entry point, initializes game loop
+- `source/core/` - Core game logic (game.lua, managers, utilities)
+- `source/systems/` - Game systems (crank, floor generation, challenges)
+- `source/assets/` - Image loading and asset management
+- `source/image/` - Image rendering
+- `source/sound/` - Audio handling
+- `docs/` - Architecture diagrams and documentation
+
+## Key Modules to Know
+
+- **Game** - Main game state and update loop
+- **InputHandler** - Button/crank input processing by screen
+- **UIStateManager** - UI state tracking (menus, selections)
+- **UIRenderer** - All rendering logic
+- **InventoryManager** - Player inventory management
+- **CutsceneManager** - Cutscene playback
+- **FloorGenerator** - Procedural floor generation

@@ -65,6 +65,30 @@ end
 
 -- === REUSABLE COMPONENTS ===
 
+-- Draw a custom radio button graphic at the specified position
+-- Returns the width of the drawn radio button
+function UIRenderer:drawRadioButton(x, y, isSelected)
+	local radius = 4
+	local size = radius * 2 + 1
+	
+	-- Draw outer circle (border)
+	gfx.setColor(gfx.kColorBlack)
+	gfx.drawRect(x, y, size, size)
+	
+	-- Draw inner circle
+	if isSelected then
+		-- Selected: fill with black dot
+		gfx.fillRect(x + 2, y + 2, size - 4, size - 4)
+	else
+		-- Unselected: fill with white
+		gfx.setColor(gfx.kColorWhite)
+		gfx.fillRect(x + 1, y + 1, size - 2, size - 2)
+		gfx.setColor(gfx.kColorBlack)
+	end
+	
+	return size + 2  -- Return width including spacing
+end
+
 function UIRenderer:drawSelectableItemList(title, itemOptions, selectedItemIds, selectedIndex, panelX, panelY, panelWidth, footerLines)
 	local lineHeight = 16
 	local maxVisibleItems = 8 -- Maximum items to show before needing to scroll
@@ -106,12 +130,18 @@ function UIRenderer:drawSelectableItemList(title, itemOptions, selectedItemIds, 
 					cursor = "> "
 				end
 
-				local marker = "[ ] "
-				if containsValue(selectedItemIds, itemOption.id) then
-					marker = "[x] "
-				end
-
-				gfx.drawText(cursor .. marker .. itemOption.name, panelX + 8, y)
+				local isSelected = containsValue(selectedItemIds, itemOption.id)
+				
+				-- Draw text with cursor
+				gfx.drawText(cursor, panelX + 8, y)
+				
+				-- Draw radio button graphic
+				local radioBtnX = panelX + 24
+				local radioBtnY = y + 3  -- Adjusted for better vertical alignment
+				self:drawRadioButton(radioBtnX, radioBtnY, isSelected)
+				
+				-- Draw item name
+				gfx.drawText(itemOption.name, radioBtnX + 15, y)
 			end
 			y = y + lineHeight
 		end
@@ -123,22 +153,45 @@ function UIRenderer:drawSelectableItemList(title, itemOptions, selectedItemIds, 
 	end
 end
 
-function UIRenderer:drawTutorialBanner(text, yPos)
+function UIRenderer:drawTutorialBanner(text, yPos, style)
 	local lines = wrapText(text, 360)
-	local lineHeight = 16
-	local padding = 6
+	local lineHeight = style == "compact" and 12 or 14  -- Compact for side banners
+	local padding = 4
 	local boxHeight = (#lines * lineHeight) + (padding * 2)
-	local startY = yPos or 0
+	
+	local startY, startX, boxWidth
+	
+	if style == "right" then
+		-- Right side banner - narrower and positioned on right
+		boxWidth = 160  -- Narrower for right side
+		startX = 400 - boxWidth - 4  -- Right side with margin
+		startY = 60  -- Middle-ish height
+		lines = wrapText(text, boxWidth - 20)  -- Re-wrap for narrower box
+		boxHeight = (#lines * lineHeight) + (padding * 2)
+	elseif style == "large" then
+		-- Large centered banner for screens with no UI
+		boxWidth = 360
+		startX = 20
+		startY = math.floor((240 - boxHeight) / 2)  -- Center vertically
+		lines = wrapText(text, boxWidth - 20)
+		boxHeight = (#lines * lineHeight) + (padding * 2)
+	else
+		-- Bottom banner (default)
+		boxWidth = 400
+		startX = 0
+		startY = 240 - boxHeight - 4  -- Bottom with small margin
+	end
 
 	gfx.setColor(gfx.kColorBlack)
-	gfx.fillRect(0, startY, 400, boxHeight)
+	gfx.fillRect(startX, startY, boxWidth, boxHeight)
 	gfx.setColor(gfx.kColorWhite)
-	gfx.drawRect(0, startY, 400, boxHeight)
+	gfx.drawRect(startX, startY, boxWidth, boxHeight)
 	
 	gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
 	local textY = startY + padding
+	local centerX = startX + (boxWidth / 2)
 	for i, line in ipairs(lines) do
-		drawCenteredText(line, 200, textY + (i - 1) * lineHeight)
+		drawCenteredText(line, centerX, textY + (i - 1) * lineHeight)
 	end
 	
 	gfx.setImageDrawMode(gfx.kDrawModeCopy)
@@ -174,13 +227,17 @@ function UIRenderer:drawMainMenuScreen()
 	end
 	options[2] = options[2] .. "< " .. difficultyText .. " >"
 	
-	options[3] = options[3] .. (uiState:isTutorialEnabled() and "[X]" or "[ ]")
-	
 	local selectedIndex = uiState:getSelectionIndex("main_menu")
 	
 	for i, opt in ipairs(options) do
 		local prefix = (i == selectedIndex) and "> " or "  "
 		gfx.drawText(prefix .. opt, 60, y)
+		
+		-- Draw radio button for tutorials option
+		if i == 3 then
+			self:drawRadioButton(155, y + 2, uiState:isTutorialEnabled())
+		end
+		
 		y = y + lineHeight
 	end
 	
@@ -431,7 +488,7 @@ function UIRenderer:drawFloorItemSelectionScreen()
 	local ownedItemOptions = inventory:getOwnedItemOptions()
 	local footerLines = {
 		"A = toggle item",
-		"B = confirm and resolve",
+		"B = confirm",
 		"Left = back",
 		"Limit: 2",
 	}
@@ -761,18 +818,18 @@ function UIRenderer:draw()
 
 	-- Tutorial banners
 	if screenState == "starting_loadout" and not self.game.uiState:isTutorialShown("starting_loadout") then
-		self:drawTutorialBanner("Welcome to the Elevator! Select up to 3 starting items. Use (A) to toggle (add/remove) items in your inventory, then press (B) to confirm.", 190)
+		self:drawTutorialBanner("Welcome to the Elevator! Select up to 3 starting items. Use (A) to toggle (add/remove) items in your inventory, then press (B) to confirm.", nil, "right")
 	elseif screenState == "closed_floor" and self.game.currentFloorIndex == 0 and not self.game.uiState:isTutorialShown("crank_up") then
-		self:drawTutorialBanner("Use the Playdate Crank to move the elevator up to Floor 1, then press (B) to open the doors.", 190)
+		self:drawTutorialBanner("Use the Playdate Crank to move the elevator up to Floor 1, then press (B) to open the doors.", nil, "right")
 	elseif screenState == "character_select" and self.game.currentFloorIndex > 0 and not self.game.uiState:isTutorialShown("character_select") then
-		self:drawTutorialBanner("Read the hint below! Use the D-Pad to pick the best family member for the danger, then press (A).", 0)
+		self:drawTutorialBanner("Read the hint below! Use the D-Pad to pick the best family member for the danger, then press (A).", nil, "right")
 	elseif screenState == "item_select" and not self.game.uiState:isTutorialShown("item_select") then
-		self:drawTutorialBanner("Equip items to boost survival chances. (A) to toggle, (B) to face the danger!", 190)
+		self:drawTutorialBanner("Equip items to boost survival chances. (A) to toggle, (B) to face the danger!", nil, "right")
 	elseif screenState == "result_cutscene" and not self.game.uiState:isTutorialShown("results") then
-		self:drawTutorialBanner("This shows your survival roll. Higher stats = better chances. Press (A/B) to continue.", 0)
+		self:drawTutorialBanner("This shows your survival roll. Higher stats = better chances. Press (A/B) to continue.", nil, "large")
 	elseif screenState == "item_collection" and not self.game.uiState:isTutorialShown("item_collection") then
-		self:drawTutorialBanner("Items found! Select an item then choose an inventory slot to replace. (A) to select, (B) when done.", 190)
+		self:drawTutorialBanner("Items found! Select an item then choose an inventory slot to replace. (A) to select, (B) when done.", nil, "right")
 	elseif screenState == "loot_select" and not self.game.uiState:isTutorialShown("loot_select") then
-		self:drawTutorialBanner("Safe room found! Select up to 2 items to keep. You can swap old items for new ones. (A) toggles, (B) confirms.", 190)
+		self:drawTutorialBanner("Safe room found! Select up to 2 items to keep. You can swap old items for new ones. (A) toggles, (B) confirms.", nil, "right")
 	end
 end
