@@ -45,15 +45,29 @@ function SurvivalSystem:calculateSurvivalChance(floorType, character, equippedIt
         statBreakdown[#statBreakdown + 1] = statName .. " bonus: +" .. string.format("%.1f", contribution)
     end
 
-    local chance = floorRule.baseChance + statBonus + itemResult.totalBonus
-    chance = clamp(math.floor(chance + 0.5), 0, 95)
-
     local breakdown = {
         "Base chance: " .. tostring(floorRule.baseChance),
     }
     for _, line in ipairs(statBreakdown) do
         breakdown[#breakdown + 1] = line
     end
+
+    local chance = floorRule.baseChance + statBonus + itemResult.totalBonus
+    
+    if character.sick then
+        chance = chance - 40
+        breakdown[#breakdown + 1] = "Sick penalty: -40.0"
+    end
+    if character.hurt then
+        chance = chance - 40
+        breakdown[#breakdown + 1] = "Hurt penalty: -40.0"
+    end
+    if character.vaccinated and floorType == "zombie" then
+        chance = chance + 50
+        breakdown[#breakdown + 1] = "Vaccinated bonus: +50.0"
+    end
+    
+    chance = clamp(math.floor(chance + 0.5), 0, 95)
 
     return {
         chance = chance,

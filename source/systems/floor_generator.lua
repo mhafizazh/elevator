@@ -104,7 +104,7 @@ function FloorGenerator:_generateLootItems()
         FloorGenerator.CONFIG.lootItemsMin,
         FloorGenerator.CONFIG.lootItemsMax
     )
-    local allItems = {"gun", "knife", "flashlight", "gas_mask", "medkit"}
+    local allItems = {"gun", "knife", "flashlight", "gas_mask"}
     local lootItems = {}
     local used = {}
     local generated = 0
@@ -125,8 +125,8 @@ function FloorGenerator:_generateCollectibleItems()
         FloorGenerator.CONFIG.collectibleItemsMin,
         FloorGenerator.CONFIG.collectibleItemsMax
     )
-    -- All collectible items including gun, knife, flashlight, gas_mask, medkit, grappling_hook, rope, compass, strength_drink, first_aid_kit
-    local allItems = {"gun", "knife", "flashlight", "gas_mask", "medkit", "grappling_hook", "rope", "compass", "strength_drink", "first_aid_kit"}
+    -- All collectible items excluding medkit
+    local allItems = {"gun", "knife", "flashlight", "gas_mask", "grappling_hook", "rope", "compass", "strength_drink", "first_aid_kit"}
     local collectibleItems = {}
     local used = {}
     local generated = 0
@@ -142,9 +142,32 @@ function FloorGenerator:_generateCollectibleItems()
     return collectibleItems
 end
 
-function FloorGenerator:_placeExitKey(floors)
+function FloorGenerator:_placeExitKey(floors, lootByFloor)
     local totalFloors = #floors - 1
     local lastQuarterStart = math.floor(totalFloors * 0.75)
+    
+    -- First priority: find a 'loot' floor in the last quarter
+    local validLootFloors = {}
+    for i = lastQuarterStart, totalFloors - 1 do
+        if floors[i] == "loot" then
+            validLootFloors[#validLootFloors + 1] = i
+        end
+    end
+    if #validLootFloors > 0 then
+        return validLootFloors[math.random(1, #validLootFloors)]
+    end
+    
+    -- Second priority: find any 'loot' floor in the tower
+    for i = 1, totalFloors - 1 do
+        if floors[i] == "loot" then
+            validLootFloors[#validLootFloors + 1] = i
+        end
+    end
+    if #validLootFloors > 0 then
+        return validLootFloors[math.random(1, #validLootFloors)]
+    end
+    
+    -- Fallback: pick a random floor in the last quarter and forcefully change it to 'loot'
     local validFloors = {}
     for i = lastQuarterStart, totalFloors - 1 do
         if floors[i] ~= "exit" then
@@ -153,18 +176,22 @@ function FloorGenerator:_placeExitKey(floors)
     end
     if #validFloors > 0 then
         local chosenIndex = validFloors[math.random(1, #validFloors)]
+        floors[chosenIndex] = "loot"
+        if lootByFloor then
+            lootByFloor[chosenIndex] = self:_generateLootItems()
+        end
         return chosenIndex
     end
     return -1
 end
 
-function FloorGenerator:generate()
+function FloorGenerator:generate(minFloor, maxFloor)
     runCounter = runCounter + 1
     local currentRun = runCounter
 
     local totalFloors = math.random(
-        FloorGenerator.CONFIG.minFloorCount,
-        FloorGenerator.CONFIG.maxFloorCount
+        minFloor or FloorGenerator.CONFIG.minFloorCount,
+        maxFloor or FloorGenerator.CONFIG.maxFloorCount
     )
     local floors = {}
     local lootByFloor = {}
@@ -188,7 +215,11 @@ function FloorGenerator:generate()
         end
 
         local floorType
-        if dangerousRemaining > 0 and (safeRemaining == 0 or math.random() < 0.6) then
+        -- Ensure floor 2 is safe to guarantee the player gets the backpack
+        if #floors == 1 then
+            floorType = "safe"
+            if safeRemaining > 0 then safeRemaining = safeRemaining - 1 end
+        elseif dangerousRemaining > 0 and (safeRemaining == 0 or math.random() < 0.6) then
             floorType = self:_pickWeighted("dangerous", FloorGenerator.CONFIG.dangerousWeights)
             dangerousRemaining = dangerousRemaining - 1
         elseif safeRemaining > 0 and (rewardRemaining == 0 or math.random() < 0.7) then
@@ -214,11 +245,16 @@ function FloorGenerator:generate()
     end
 
     floors[#floors + 1] = "exit"
-    exitKeyFloor = self:_placeExitKey(floors)
+    exitKeyFloor = self:_placeExitKey(floors, lootByFloor)
     
     -- Place backpack on floor 2 (index 2, which is the 3rd floor since floor 1 is at index 1)
     if #collectibleByFloor >= 2 then
         table.insert(collectibleByFloor[2], "backpack")
+    end
+    
+    -- Place medkit every 5 floors
+    for i = 5, #collectibleByFloor, 5 do
+        table.insert(collectibleByFloor[i], "medkit")
     end
 
 	if DEBUG_MODE then
