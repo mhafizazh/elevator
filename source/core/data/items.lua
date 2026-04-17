@@ -41,14 +41,6 @@ Items = {
             radiation = true,
         }
     },
-    medkit = {
-        id = "medkit",
-        name = "Medkit",
-        floorBonus = {
-            trap = 20,
-            radiation = 8,
-        }
-    },
     backpack = {
         id = "backpack",
         name = "Backpack",
@@ -89,16 +81,6 @@ Items = {
         floorBonus = {
             criminal = 12,
             zombie = 7,
-        },
-        isCollectible = true,
-    },
-    first_aid_kit = {
-        id = "first_aid_kit",
-        name = "First Aid Kit",
-        floorBonus = {
-            zombie = 18,
-            trap = 10,
-            radiation = 6,
         },
         isCollectible = true,
     }

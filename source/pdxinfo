@@ -1,0 +1,7 @@
+name=Elevator Escape
+author=Hafiz Azhari
+description=A thrilling elevator escape adventure game for Playdate.
+bundleID=
+version=1.0
+buildNumber=1
+imagePath=.

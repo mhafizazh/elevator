@@ -126,7 +126,7 @@ function FloorGenerator:_generateCollectibleItems()
         FloorGenerator.CONFIG.collectibleItemsMax
     )
     -- All collectible items excluding medkit
-    local allItems = {"gun", "knife", "flashlight", "gas_mask", "grappling_hook", "rope", "compass", "strength_drink", "first_aid_kit"}
+    local allItems = {"gun", "knife", "flashlight", "gas_mask", "grappling_hook", "rope", "compass", "strength_drink"}
     local collectibleItems = {}
     local used = {}
     local generated = 0

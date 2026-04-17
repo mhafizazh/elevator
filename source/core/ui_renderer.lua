@@ -6,11 +6,63 @@ import "assets/images"
 UIRenderer = {}
 UIRenderer.__index = UIRenderer
 
+-- === UI LAYOUT MANAGER ===
+
+UILayoutManager = {}
+UILayoutManager.__index = UILayoutManager
+
+function UILayoutManager.new()
+	local self = setmetatable({}, UILayoutManager)
+	self.elements = {} -- list of {x, y, width, height, priority, adjustedX, adjustedY}
+	return self
+end
+
+function UILayoutManager:addElement(x, y, width, height, priority)
+	local element = {x = x, y = y, width = width, height = height, priority = priority or 0}
+	table.insert(self.elements, element)
+	
+	-- Resolve collisions and adjust positions
+	self:resolveCollisions()
+	
+	-- Return the adjusted position
+	return element.adjustedX or x, element.adjustedY or y
+end
+
+function UILayoutManager:resolveCollisions()
+	-- Sort elements by priority (higher priority elements are positioned first and don't move)
+	table.sort(self.elements, function(a, b) return a.priority > b.priority end)
+	
+	-- For each element, starting from highest priority, check against already positioned elements
+	for i, elem in ipairs(self.elements) do
+		elem.adjustedX = elem.x
+		elem.adjustedY = elem.y
+		
+		-- Check against all higher priority elements (already positioned)
+		for j = 1, i - 1 do
+			local other = self.elements[j]
+			if self:rectsOverlap(elem.adjustedX, elem.adjustedY, elem.width, elem.height,
+							   other.adjustedX, other.adjustedY, other.width, other.height) then
+				-- Simple repositioning: move down by the height of the overlapping element + margin
+				elem.adjustedY = other.adjustedY + other.height + 4
+			end
+		end
+	end
+end
+
+function UILayoutManager:rectsOverlap(x1, y1, w1, h1, x2, y2, w2, h2)
+	return x1 < x2 + w2 and x2 < x1 + w1 and y1 < y2 + h2 and y2 < y1 + h1
+end
+
+function UILayoutManager:clear()
+	self.elements = {}
+end
+
 local gfx = playdate.graphics
 
 function UIRenderer.new(game)
 	local self = setmetatable({}, UIRenderer)
 	self.game = game
+	self.layoutManager = UILayoutManager.new()
 	return self
 end
 
@@ -87,6 +139,32 @@ function UIRenderer:drawRadioButton(x, y, isSelected)
 	end
 	
 	return size + 2  -- Return width including spacing
+end
+
+-- Custom high-quality image scaling that maintains aspect ratio
+function UIRenderer:scaleImageToFit(image, availableWidth, availableHeight, preserveAspectRatio)
+	local imgWidth, imgHeight = image:getSize()
+	
+	if preserveAspectRatio then
+		-- Calculate scale that fits both dimensions while maintaining aspect ratio
+		local scaleX = availableWidth / imgWidth
+		local scaleY = availableHeight / imgHeight
+		local finalScale = math.min(scaleX, scaleY)
+		
+		-- Prevent upscaling beyond original size
+		if finalScale > 1.0 then finalScale = 1.0 end
+		
+		local scaledWidth = imgWidth * finalScale
+		local scaledHeight = imgHeight * finalScale
+		
+		return finalScale, scaledWidth, scaledHeight
+	else
+		-- Allow stretching to fill space (current behavior for frames)
+		local scaleX = availableWidth / imgWidth
+		local scaleY = availableHeight / imgHeight
+		
+		return scaleX, availableWidth, availableHeight
+	end
 end
 
 function UIRenderer:drawSelectableItemList(title, itemOptions, selectedItemIds, selectedIndex, panelX, panelY, panelWidth, footerLines)
@@ -182,14 +260,17 @@ function UIRenderer:drawTutorialBanner(text, yPos, style)
 		startY = 240 - boxHeight - 4  -- Bottom with small margin
 	end
 
+	-- Use layout manager to prevent overlaps (high priority for tutorials)
+	local adjustedX, adjustedY = self.layoutManager:addElement(startX, startY, boxWidth, boxHeight, 10)
+
 	gfx.setColor(gfx.kColorBlack)
-	gfx.fillRect(startX, startY, boxWidth, boxHeight)
+	gfx.fillRect(adjustedX, adjustedY, boxWidth, boxHeight)
 	gfx.setColor(gfx.kColorWhite)
-	gfx.drawRect(startX, startY, boxWidth, boxHeight)
+	gfx.drawRect(adjustedX, adjustedY, boxWidth, boxHeight)
 	
 	gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-	local textY = startY + padding
-	local centerX = startX + (boxWidth / 2)
+	local textY = adjustedY + padding
+	local centerX = adjustedX + (boxWidth / 2)
 	for i, line in ipairs(lines) do
 		drawCenteredText(line, centerX, textY + (i - 1) * lineHeight)
 	end
@@ -271,188 +352,75 @@ function UIRenderer:drawCharacterSelectionScreen()
 	local game = self.game
 	local uiState = game.uiState
 	
-	local screenCenterX = 200
-	local carouselY = 50
-	local spacing = 80  -- Distance between carousel items
-	
-	local totalChars = #game.characterOptions
 	local selectedCharIndex = uiState:getSelectionIndex("character_select")
+	local totalChars = #game.characterOptions
 	
-	-- Build carousel slots with proper 3D positioning
-	local carouselSlots = {}
-	for offset = -2, 2 do
-		local isSelected = (offset == 0)
-		local distance = math.abs(offset)
-		
-		-- X scale (squash) makes the card look turned
-		local scaleX = isSelected and 1.0 or (0.5 + (0.05 * (2 - distance)))
-		-- Y scale reduces slightly for distance
-		local scaleY = isSelected and 1.0 or (0.85 + (0.05 * (2 - distance)))
-		
-		local posX = screenCenterX + (offset * spacing)
-		local posY = carouselY + (distance * 8)
-		
-		local baseFrameSize = 90
-		local frameWidth = baseFrameSize * scaleX
-		local frameHeight = baseFrameSize * scaleY
-		
-		-- Y-squash for true 3D perspective (trapezoid effect)
-		local yPerspective = 6 * distance
-		local leftSquash = (offset > 0) and yPerspective or 0
-		local rightSquash = (offset < 0) and yPerspective or 0
-		
-		table.insert(carouselSlots, {
-			offset = offset,
-			frameWidth = frameWidth,
-			frameHeight = frameHeight,
-			leftSquash = leftSquash,
-			rightSquash = rightSquash,
-			posX = posX,
-			posY = posY,
-			zDepth = -distance * 100,
-			isSelected = isSelected
-		})
-	end
+	-- Simple horizontal layout for 4 character boxes
+	local boxWidth = 80
+	local boxHeight = 100
+	local spacing = 20
+	local totalWidth = 4 * boxWidth + 3 * spacing
+	local startX = (400 - totalWidth) / 2  -- Center the layout
+	local startY = 80
 	
-	-- Sort by Z-depth (render back to front)
-	table.sort(carouselSlots, function(a, b) return a.zDepth < b.zDepth end)
-	
-	-- Render carousel items
-	for _, slot in ipairs(carouselSlots) do
-		local charIndex = selectedCharIndex + slot.offset
-		
-		while charIndex < 1 do
-			charIndex = charIndex + totalChars
-		end
-		while charIndex > totalChars do
-			charIndex = charIndex - totalChars
-		end
-		
+	for i = 1, totalChars do
+		local charIndex = i
 		local characterId = game.characterOptions[charIndex]
 		local character = game.characters[characterId]
 		local charImage = game.images.characters[characterId]
 		
-		-- Calculate frame dimensions and position
-		local frameWidth = slot.frameWidth
-		local frameHeight = slot.frameHeight
-		local frameX = slot.posX - (frameWidth / 2)
-		local frameY = slot.posY - (frameHeight / 2)
+		local boxX = startX + (i - 1) * (boxWidth + spacing)
+		local boxY = startY
 		
-		-- Calculate trapezoid corners for perspective
-		local p1x, p1y = frameX, frameY + slot.leftSquash
-		local p2x, p2y = frameX + frameWidth, frameY + slot.rightSquash
-		local p3x, p3y = frameX + frameWidth, frameY + frameHeight - slot.rightSquash
-		local p4x, p4y = frameX, frameY + frameHeight - slot.leftSquash
-		
-		local framePoly = playdate.geometry.polygon.new(p1x, p1y, p2x, p2y, p3x, p3y, p4x, p4y)
-		framePoly:close()
-		
-		-- Draw drop shadow
-		gfx.setColor(gfx.kColorBlack)
-		local shadowOffset = slot.isSelected and 4 or 2
-		local shadowPoly = playdate.geometry.polygon.new(p1x + shadowOffset, p1y + shadowOffset, p2x + shadowOffset, p2y + shadowOffset, p3x + shadowOffset, p3y + shadowOffset, p4x + shadowOffset, p4y + shadowOffset)
-		shadowPoly:close()
-		gfx.fillPolygon(shadowPoly)
-		
-		-- Draw 3D Spine (Thickness) to make it look like a physical box
-		if slot.offset ~= 0 then
-			local spineWidth = 4
-			if slot.offset < 0 then
-				-- Spine on the right side
-				local spPoly = playdate.geometry.polygon.new(p2x, p2y, p2x + spineWidth, p2y + spineWidth, p3x + spineWidth, p3y - spineWidth, p3x, p3y)
-				spPoly:close()
-				gfx.fillPolygon(spPoly)
-			elseif slot.offset > 0 then
-				-- Spine on the left side
-				local spPoly = playdate.geometry.polygon.new(p1x - spineWidth, p1y + spineWidth, p1x, p1y, p4x, p4y, p4x - spineWidth, p4y - spineWidth)
-				spPoly:close()
-				gfx.fillPolygon(spPoly)
-			end
-		end
-		
-		-- Draw Frame Background
+		-- Draw box background
 		gfx.setColor(gfx.kColorWhite)
-		gfx.fillPolygon(framePoly)
+		gfx.fillRect(boxX, boxY, boxWidth, boxHeight)
+		gfx.setColor(gfx.kColorBlack)
 		
-		-- Draw character image scaled to safely fit inside the trapezoid
+		-- Thicker border for selected
+		if charIndex == selectedCharIndex then
+			gfx.setLineWidth(3)
+		else
+			gfx.setLineWidth(1)
+		end
+		gfx.drawRect(boxX, boxY, boxWidth, boxHeight)
+		gfx.setLineWidth(1)
+		
+		-- Draw character image if available, else name
+		local imageY = boxY + 10
 		if charImage then
 			local imgWidth, imgHeight = charImage:getSize()
-			
-			-- Calculate the maximum safe rectangle inside the trapezoid
-			local innerPadding = 6
-			local availableWidth = frameWidth - innerPadding
-			local availableHeight = frameHeight - 2 * math.max(slot.leftSquash, slot.rightSquash) - innerPadding
-			
-			-- Calculate strict uniform scale so image never spills
-			local scaleFitX = availableWidth / imgWidth
-			local scaleFitY = availableHeight / imgHeight
-			local finalScale = math.min(scaleFitX, scaleFitY)
-			if finalScale > 1.0 then finalScale = 1.0 end
-			
-			local scaledWidth = imgWidth * finalScale
-			local scaledHeight = imgHeight * finalScale
-			
-			-- Center perfectly in the frame bounds
-			local drawX = frameX + (frameWidth - scaledWidth) / 2
-			local drawY = frameY + (frameHeight - scaledHeight) / 2
-			
-			gfx.pushContext()
-			if not character.alive then
-				-- Dead character: render dithered
-				gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-				charImage:drawScaled(drawX, drawY, finalScale)
-				
-				-- Apply dither strictly over the image rect to preserve white frame
-				gfx.setImageDrawMode(gfx.kDrawModeFillBlack)
-				gfx.setDitherPattern(0.5)
-				gfx.fillRect(drawX, drawY, scaledWidth, scaledHeight)
-			else
-				charImage:drawScaled(drawX, drawY, finalScale)
-			end
-			gfx.popContext()
-		else
-			-- Fallback: text
-			gfx.setColor(gfx.kColorBlack)
-			drawCenteredText(character.name, frameX + (frameWidth / 2), frameY + (frameHeight / 2) - 4)
+			local scale = math.min((boxWidth - 10) / imgWidth, (boxHeight - 40) / imgHeight)
+			if scale > 1 then scale = 1 end
+			local drawX = boxX + (boxWidth - imgWidth * scale) / 2
+			local drawY = imageY
+			charImage:drawScaled(drawX, drawY, scale)
 		end
 		
-		-- Draw Frame Border
-		gfx.setColor(gfx.kColorBlack)
-		if slot.isSelected then
-			gfx.setLineWidth(3)
-			gfx.drawPolygon(framePoly)
-			gfx.setLineWidth(1)
-		else
-			gfx.drawPolygon(framePoly)
-		end
+		-- Draw character name
+		local nameY = boxY + boxHeight - 30
+		gfx.drawText(character.name, boxX + 10, nameY)
 		
-		-- Draw character info below frame (only for selected)
-		if slot.isSelected then
-			local nameY = math.max(p3y, p4y) + 8
-			gfx.setColor(gfx.kColorBlack)
-			drawCenteredText(character.name, frameX + (frameWidth / 2), nameY)
-			
-			if not character.alive then
-				drawCenteredText("DEAD", frameX + (frameWidth / 2), nameY + 12)
-			else
-				if character.sick then
-					drawCenteredText("(SICK)", frameX + (frameWidth / 2), nameY + 12)
-				elseif character.hurt then
-					drawCenteredText("(HURT)", frameX + (frameWidth / 2), nameY + 12)
-				elseif character.vaccinated then
-					drawCenteredText("(VACC)", frameX + (frameWidth / 2), nameY + 12)
-				end
-			end
+		-- Draw status
+		local statusY = nameY + 12
+		if not character.alive then
+			gfx.drawText("DEAD", boxX + 10, statusY)
+		elseif character.sick then
+			gfx.drawText("SICK", boxX + 10, statusY)
+		elseif character.hurt then
+			gfx.drawText("HURT", boxX + 10, statusY)
+		elseif character.vaccinated then
+			gfx.drawText("VACC", boxX + 10, statusY)
 		end
 	end
 
-	local infoY = 178
+	local infoY = 200
 	local lineHeight = 16
 
 	gfx.setColor(gfx.kColorWhite)
-	gfx.fillRect(10, infoY - 4, 380, 62)
+	gfx.fillRect(10, infoY - 4, 380, 40)
 	gfx.setColor(gfx.kColorBlack)
-	gfx.drawRect(10, infoY - 4, 380, 62)
+	gfx.drawRect(10, infoY - 4, 380, 40)
 
 	if self.cachedDialogueFloor ~= game.currentFloorIndex then
 		local floorType = game.floorGenerator:getFloorType(game.gameData, game.currentFloorIndex)
@@ -470,7 +438,7 @@ function UIRenderer:drawCharacterSelectionScreen()
 
 	for i, line in ipairs(lines) do
 		gfx.drawText(line, 20, startY + (i - 1) * lineHeight)
-		if startY + (i - 1) * lineHeight > infoY + 50 then
+		if startY + (i - 1) * lineHeight > infoY + 30 then
 			break
 		end
 	end
@@ -544,15 +512,19 @@ function UIRenderer:drawFloorValueDebugPanel()
 	local panelY = 8
 	local panelWidth = 192
 	local panelHeight = 224
+	
+	-- Use layout manager to prevent overlaps
+	local adjustedX, adjustedY = self.layoutManager:addElement(panelX, panelY, panelWidth, panelHeight, 0) -- Low priority, moves if conflict
+	
 	local lineHeight = 14
 
 	gfx.setColor(gfx.kColorWhite)
-	gfx.fillRect(panelX, panelY, panelWidth, panelHeight)
+	gfx.fillRect(adjustedX, adjustedY, panelWidth, panelHeight)
 	gfx.setColor(gfx.kColorBlack)
-	gfx.drawRect(panelX, panelY, panelWidth, panelHeight)
+	gfx.drawRect(adjustedX, adjustedY, panelWidth, panelHeight)
 
-	local y = panelY + 8
-	gfx.drawText("Debug mode", panelX + 6, y)
+	local y = adjustedY + 8
+	gfx.drawText("Debug mode", adjustedX + 6, y)
 	y = y + lineHeight
 
 	local startFloor = math.max(0, game.currentFloorIndex - 1)
@@ -575,19 +547,19 @@ function UIRenderer:drawFloorValueDebugPanel()
 		end
 
 		local floorLine = string.format("%s%02d %-10s %2d%%%s", marker, floorNumber, floorType, preview.chance, keyIndicator)
-		gfx.drawText(floorLine, panelX + 6, y)
+		gfx.drawText(floorLine, adjustedX + 6, y)
 		y = y + lineHeight
 	end
 
 	y = y + 4
-	gfx.drawText("Last calc:", panelX + 6, y)
+	gfx.drawText("Last calc:", adjustedX + 6, y)
 	y = y + lineHeight
 
 	for _, line in ipairs(game.cutscene:getDebugLines()) do
-		if y > panelY + panelHeight - lineHeight then
+		if y > adjustedY + panelHeight - lineHeight then
 			break
 		end
-		gfx.drawText(line, panelX + 6, y)
+		gfx.drawText(line, adjustedX + 6, y)
 		y = y + lineHeight
 	end
 end
@@ -765,6 +737,9 @@ end
 
 function UIRenderer:draw()
 	gfx.clear(gfx.kColorWhite)
+	
+	-- Clear layout manager for new frame
+	self.layoutManager:clear()
 
 	local backgroundToDraw = self.game.images.alternateBackground
 	local screenState = self.game.uiState:getScreenState()

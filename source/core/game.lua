@@ -178,7 +178,7 @@ function Game:openItemCollection()
 	-- If backpack found, show backpack cutscene instead
 	if hasBackpack then
 		self.inventory:increaseCapacity()
-		self.cutscene:playCutscene(ItemFoundCutscene.new("backpackCutscene", "You found the backpack!"))
+		self.cutscene:playCutscene(ItemFoundCutscene.new("backpackCutscene", "You found a backpack! you can have more items"))
 		self.uiState:setScreenState("backpack_cutscene")
 		self.uiState:setSummary("You found the backpack!")
 		return
