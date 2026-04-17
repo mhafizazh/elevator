@@ -41,13 +41,48 @@ Items = {
             radiation = true,
         }
     },
-    medkit = {
-        id = "medkit",
-        name = "Medkit",
+    backpack = {
+        id = "backpack",
+        name = "Backpack",
+        floorBonus = {},
+        isCollectible = true,
+        collectibleOnly = true,
+    },
+    grappling_hook = {
+        id = "grappling_hook",
+        name = "Grappling Hook",
         floorBonus = {
-            trap = 20,
-            radiation = 8,
-        }
+            trap = 15,
+            criminal = 8,
+        },
+        isCollectible = true,
+    },
+    rope = {
+        id = "rope",
+        name = "Rope",
+        floorBonus = {
+            trap = 12,
+            criminal = 6,
+        },
+        isCollectible = true,
+    },
+    compass = {
+        id = "compass",
+        name = "Compass",
+        floorBonus = {
+            zombie = 10,
+            safe = 5,
+        },
+        isCollectible = true,
+    },
+    strength_drink = {
+        id = "strength_drink",
+        name = "Strength Drink",
+        floorBonus = {
+            criminal = 12,
+            zombie = 7,
+        },
+        isCollectible = true,
     }
 }
 

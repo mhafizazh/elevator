@@ -93,6 +93,29 @@ function FloorChallengeSystem:resolveFloorChallenge(floorType, character, equipp
     local chanceResult = self.survivalSystem:calculateSurvivalChance(floorType, character, equippedItemIds, rule)
     local rollResult = self.survivalSystem:resolveSurvival(chanceResult.chance)
 
+    local gotSick = false
+    local gotHurt = false
+    
+    if rollResult.survived then
+        -- Close call margin: if the roll is close to the max chance, you get a penalty status
+        local margin = math.max(10, chanceResult.chance * 0.2)
+        if rollResult.roll > chanceResult.chance - margin then
+            if floorType == "zombie" and not character.vaccinated then
+                gotSick = true
+                character.sick = true
+            elseif floorType == "radiation" then
+                gotSick = true
+                character.sick = true
+            elseif floorType == "criminal" then
+                gotHurt = true
+                character.hurt = true
+            elseif floorType == "trap" then
+                gotHurt = true
+                character.hurt = true
+            end
+        end
+    end
+
     return {
         survived = rollResult.survived,
         roll = rollResult.roll,
@@ -101,6 +124,8 @@ function FloorChallengeSystem:resolveFloorChallenge(floorType, character, equipp
         deathReason = rule.deathReason,
         debugLines = chanceResult.breakdown,
         itemDebugLines = chanceResult.itemDebugLines,
+        gotSick = gotSick,
+        gotHurt = gotHurt,
     }
 end
 
@@ -163,6 +188,11 @@ function FloorChallengeSystem:enterFloor(floorNumber, floorType, character, equi
 
     if result.survived then
         lines[#lines + 1] = "Result: SURVIVED"
+        if result.gotSick then
+            lines[#lines + 1] = "Condition: SICK"
+        elseif result.gotHurt then
+            lines[#lines + 1] = "Condition: HURT"
+        end
         if result.event == "loot" then
             lines[#lines + 1] = "Loot floor completed. Reward items can be granted here."
         elseif result.event == "exit" then

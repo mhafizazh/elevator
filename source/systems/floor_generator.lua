@@ -31,6 +31,8 @@ FloorGenerator.CONFIG = {
     },
     lootItemsMin = 3,
     lootItemsMax = 7,
+    collectibleItemsMin = 2,
+    collectibleItemsMax = 5,
 }
 
 local runCounter = 0
@@ -102,7 +104,7 @@ function FloorGenerator:_generateLootItems()
         FloorGenerator.CONFIG.lootItemsMin,
         FloorGenerator.CONFIG.lootItemsMax
     )
-    local allItems = {"gun", "knife", "flashlight", "gas_mask", "medkit"}
+    local allItems = {"gun", "knife", "flashlight", "gas_mask"}
     local lootItems = {}
     local used = {}
     local generated = 0
@@ -118,9 +120,54 @@ function FloorGenerator:_generateLootItems()
     return lootItems
 end
 
-function FloorGenerator:_placeExitKey(floors)
+function FloorGenerator:_generateCollectibleItems()
+    local count = math.random(
+        FloorGenerator.CONFIG.collectibleItemsMin,
+        FloorGenerator.CONFIG.collectibleItemsMax
+    )
+    -- All collectible items excluding medkit
+    local allItems = {"gun", "knife", "flashlight", "gas_mask", "grappling_hook", "rope", "compass", "strength_drink"}
+    local collectibleItems = {}
+    local used = {}
+    local generated = 0
+    while generated < count and generated < #allItems do
+        local itemIndex = math.random(1, #allItems)
+        local itemId = allItems[itemIndex]
+        if not used[itemId] then
+            used[itemId] = true
+            generated = generated + 1
+            collectibleItems[#collectibleItems + 1] = itemId
+        end
+    end
+    return collectibleItems
+end
+
+function FloorGenerator:_placeExitKey(floors, lootByFloor)
     local totalFloors = #floors - 1
     local lastQuarterStart = math.floor(totalFloors * 0.75)
+    
+    -- First priority: find a 'loot' floor in the last quarter
+    local validLootFloors = {}
+    for i = lastQuarterStart, totalFloors - 1 do
+        if floors[i] == "loot" then
+            validLootFloors[#validLootFloors + 1] = i
+        end
+    end
+    if #validLootFloors > 0 then
+        return validLootFloors[math.random(1, #validLootFloors)]
+    end
+    
+    -- Second priority: find any 'loot' floor in the tower
+    for i = 1, totalFloors - 1 do
+        if floors[i] == "loot" then
+            validLootFloors[#validLootFloors + 1] = i
+        end
+    end
+    if #validLootFloors > 0 then
+        return validLootFloors[math.random(1, #validLootFloors)]
+    end
+    
+    -- Fallback: pick a random floor in the last quarter and forcefully change it to 'loot'
     local validFloors = {}
     for i = lastQuarterStart, totalFloors - 1 do
         if floors[i] ~= "exit" then
@@ -129,21 +176,26 @@ function FloorGenerator:_placeExitKey(floors)
     end
     if #validFloors > 0 then
         local chosenIndex = validFloors[math.random(1, #validFloors)]
+        floors[chosenIndex] = "loot"
+        if lootByFloor then
+            lootByFloor[chosenIndex] = self:_generateLootItems()
+        end
         return chosenIndex
     end
     return -1
 end
 
-function FloorGenerator:generate()
+function FloorGenerator:generate(minFloor, maxFloor)
     runCounter = runCounter + 1
     local currentRun = runCounter
 
     local totalFloors = math.random(
-        FloorGenerator.CONFIG.minFloorCount,
-        FloorGenerator.CONFIG.maxFloorCount
+        minFloor or FloorGenerator.CONFIG.minFloorCount,
+        maxFloor or FloorGenerator.CONFIG.maxFloorCount
     )
     local floors = {}
     local lootByFloor = {}
+    local collectibleByFloor = {}
     local exitKeyFloor = -1
 
     local dangerousRemaining = FloorGenerator.CONFIG.dangerousPerSegment
@@ -163,7 +215,11 @@ function FloorGenerator:generate()
         end
 
         local floorType
-        if dangerousRemaining > 0 and (safeRemaining == 0 or math.random() < 0.6) then
+        -- Ensure floor 2 is safe to guarantee the player gets the backpack
+        if #floors == 1 then
+            floorType = "safe"
+            if safeRemaining > 0 then safeRemaining = safeRemaining - 1 end
+        elseif dangerousRemaining > 0 and (safeRemaining == 0 or math.random() < 0.6) then
             floorType = self:_pickWeighted("dangerous", FloorGenerator.CONFIG.dangerousWeights)
             dangerousRemaining = dangerousRemaining - 1
         elseif safeRemaining > 0 and (rewardRemaining == 0 or math.random() < 0.7) then
@@ -180,11 +236,26 @@ function FloorGenerator:generate()
         if floorType == "loot" then
             lootByFloor[#floors] = self:_generateLootItems()
         end
+        
+        -- Generate collectible items for every floor
+        local collectibles = self:_generateCollectibleItems()
+        collectibleByFloor[#floors] = collectibles
+        
         floorsInCurrentSegment = floorsInCurrentSegment + 1
     end
 
-	floors[#floors + 1] = "exit"
-    exitKeyFloor = self:_placeExitKey(floors)
+    floors[#floors + 1] = "exit"
+    exitKeyFloor = self:_placeExitKey(floors, lootByFloor)
+    
+    -- Place backpack on floor 2 (index 2, which is the 3rd floor since floor 1 is at index 1)
+    if #collectibleByFloor >= 2 then
+        table.insert(collectibleByFloor[2], "backpack")
+    end
+    
+    -- Place medkit every 5 floors
+    for i = 5, #collectibleByFloor, 5 do
+        table.insert(collectibleByFloor[i], "medkit")
+    end
 
 	if DEBUG_MODE then
 		print("")
@@ -202,17 +273,21 @@ function FloorGenerator:generate()
                     lootInfo = " -> " .. #items .. " items"
                 end
             end
+            local collectibleInfo = ""
+            if collectibleByFloor[i] then
+                collectibleInfo = " -> " .. #collectibleByFloor[i] .. " collectibles"
+            end
             local keyMarker = ""
             if i == exitKeyFloor then
                 keyMarker = " [EXIT KEY]"
             end
-			print(string.format("[%02d] Seg %d: %s%s%s", i, segment, floorType, lootInfo, keyMarker))
+			print(string.format("[%02d] Seg %d: %s%s%s%s", i, segment, floorType, lootInfo, collectibleInfo, keyMarker))
 		end
 		print("===========================")
 		print("")
 	end
 
-	return floors, lootByFloor, exitKeyFloor
+	return floors, lootByFloor, exitKeyFloor, collectibleByFloor
 end
 
 function FloorGenerator:getFloorType(gameData, floorIndex)
